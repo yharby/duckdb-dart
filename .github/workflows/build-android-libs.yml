@@ -124,7 +124,9 @@ jobs:
           OPENSSL_ROOT=$(pwd)/../../build/openssl/${{ matrix.abi }}
           CURL_ROOT=$(pwd)/../../build/curl/${{ matrix.abi }}
 
-          # Build with core_functions, icu, parquet, json, httpfs extensions built-in
+          # Build with icu, parquet, json, httpfs extensions statically linked into libduckdb.so
+          # Note: We do NOT use EXTENSION_STATIC_BUILD as that builds loadable .duckdb_extension files
+          # which fail to link against static OpenSSL due to stdin/stderr symbol issues
           cmake -G Ninja \
             -DCMAKE_TOOLCHAIN_FILE=$ANDROID_NDK_HOME/build/cmake/android.toolchain.cmake \
             -DANDROID_ABI=${{ matrix.abi }} \
@@ -138,7 +140,7 @@ jobs:
             -DBUILD_EXTENSIONS="icu;parquet;json;httpfs" \
             -DENABLE_EXTENSION_AUTOLOADING=OFF \
             -DENABLE_EXTENSION_AUTOINSTALL=OFF \
-            -DEXTENSION_STATIC_BUILD=ON \
+            -DDUCKDB_EXTRA_LINK_FLAGS="-llog" \
             -DDUCKDB_EXPLICIT_PLATFORM=${{ matrix.duckdb_platform }} \
             -DOPENSSL_ROOT_DIR=$OPENSSL_ROOT \
             -DOPENSSL_INCLUDE_DIR=$OPENSSL_ROOT/include \
