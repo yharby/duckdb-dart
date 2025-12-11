@@ -1,0 +1,212 @@
+name: Build iOS with Spatial Extension
+
+on:
+  workflow_dispatch:
+    inputs:
+      duckdb_version:
+        description: 'DuckDB version to build (leave empty for latest)'
+        required: false
+        default: ''
+      create_release:
+        description: 'Create a GitHub release'
+        type: boolean
+        default: true
+
+env:
+  DUCKDB_REPO: duckdb/duckdb
+  SPATIAL_REPO: duckdb/duckdb-spatial
+
+jobs:
+  check-version:
+    runs-on: ubuntu-latest
+    outputs:
+      duckdb_version: ${{ steps.get_version.outputs.version }}
+      should_build: ${{ steps.check_existing.outputs.should_build }}
+      release_tag: ${{ steps.get_version.outputs.release_tag }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Get DuckDB version
+        id: get_version
+        run: |
+          if [ -n "${{ github.event.inputs.duckdb_version }}" ]; then
+            VERSION="${{ github.event.inputs.duckdb_version }}"
+          else
+            VERSION=$(curl -s https://api.github.com/repos/${{ env.DUCKDB_REPO }}/releases/latest | jq -r '.tag_name' | sed 's/^v//')
+          fi
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "release_tag=v${VERSION}-ios-spatial" >> $GITHUB_OUTPUT
+          echo "DuckDB version: $VERSION"
+
+      - name: Check if release already exists
+        id: check_existing
+        run: |
+          RELEASE_TAG="v${{ steps.get_version.outputs.version }}-ios-spatial"
+          if gh release view "$RELEASE_TAG" --repo ${{ github.repository }} &>/dev/null; then
+            echo "Release $RELEASE_TAG already exists"
+            echo "should_build=false" >> $GITHUB_OUTPUT
+          else
+            echo "Release $RELEASE_TAG does not exist, will build"
+            echo "should_build=true" >> $GITHUB_OUTPUT
+          fi
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  build-ios-spatial:
+    needs: check-version
+    if: needs.check-version.outputs.should_build == 'true'
+    runs-on: macos-14  # M1 runner for faster builds
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Xcode
+        uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: latest-stable
+
+      - name: Install build tools
+        run: |
+          brew install ninja cmake
+
+      - name: Clone DuckDB Spatial
+        run: |
+          DUCKDB_VERSION="${{ needs.check-version.outputs.duckdb_version }}"
+          echo "Building DuckDB Spatial for version: $DUCKDB_VERSION"
+
+          # Clone duckdb-spatial with submodules (includes DuckDB)
+          git clone --recurse-submodules https://github.com/${{ env.SPATIAL_REPO }}.git duckdb-spatial
+
+          # Checkout matching DuckDB version in submodule
+          cd duckdb-spatial/duckdb
+          git fetch --tags
+          git checkout "v${DUCKDB_VERSION}" || echo "Warning: Version mismatch, using default"
+          cd ..
+
+      - name: Setup vcpkg for iOS
+        run: |
+          cd duckdb-spatial
+
+          # Bootstrap vcpkg
+          if [ ! -f "vcpkg/vcpkg" ]; then
+            git clone https://github.com/Microsoft/vcpkg.git vcpkg
+            ./vcpkg/bootstrap-vcpkg.sh
+          fi
+
+          # Set vcpkg environment
+          echo "VCPKG_ROOT=$(pwd)/vcpkg" >> $GITHUB_ENV
+
+      - name: Build Spatial Extension for iOS (arm64)
+        run: |
+          cd duckdb-spatial
+          mkdir -p build/ios-arm64
+          cd build/ios-arm64
+
+          # Configure for iOS with spatial extension
+          # Note: Network features are disabled for iOS in vcpkg.json
+          cmake ../.. \
+            -G Ninja \
+            -DCMAKE_SYSTEM_NAME=iOS \
+            -DCMAKE_OSX_ARCHITECTURES=arm64 \
+            -DCMAKE_OSX_DEPLOYMENT_TARGET=12.0 \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_TOOLCHAIN_FILE=$VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake \
+            -DVCPKG_TARGET_TRIPLET=arm64-ios \
+            -DBUILD_SHELL=OFF \
+            -DBUILD_UNITTESTS=OFF \
+            -DEXTENSION_STATIC_BUILD=ON \
+            -DBUILD_EXTENSIONS="icu;json;parquet" \
+            -DSPATIAL_USE_NETWORK=OFF
+
+          cmake --build . --config Release --parallel
+
+      - name: Create Framework with Spatial
+        run: |
+          DUCKDB_VERSION="${{ needs.check-version.outputs.duckdb_version }}"
+
+          mkdir -p duckdb-spatial.framework/Headers
+
+          # Copy headers
+          cp duckdb-spatial/duckdb/src/include/duckdb.h duckdb-spatial.framework/Headers/
+
+          # Find and copy the built library
+          DEVICE_LIB=$(find duckdb-spatial/build/ios-arm64 -name "libduckdb.a" -o -name "libduckdb_static.a" | head -1)
+          if [ -n "$DEVICE_LIB" ]; then
+            cp "$DEVICE_LIB" duckdb-spatial.framework/duckdb
+            echo "Copied library from: $DEVICE_LIB"
+          else
+            echo "ERROR: Could not find library"
+            find duckdb-spatial/build/ios-arm64 -name "*.a" 2>/dev/null | head -20
+            exit 1
+          fi
+
+          # Create Info.plist
+          cat > duckdb-spatial.framework/Info.plist << EOF
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+            <key>CFBundleExecutable</key>
+            <string>duckdb</string>
+            <key>CFBundleIdentifier</key>
+            <string>org.duckdb.duckdb-spatial</string>
+            <key>CFBundleInfoDictionaryVersion</key>
+            <string>6.0</string>
+            <key>CFBundleName</key>
+            <string>duckdb-spatial</string>
+            <key>CFBundlePackageType</key>
+            <string>FMWK</string>
+            <key>CFBundleShortVersionString</key>
+            <string>${DUCKDB_VERSION}</string>
+            <key>CFBundleVersion</key>
+            <string>${DUCKDB_VERSION}</string>
+            <key>MinimumOSVersion</key>
+            <string>12.0</string>
+          </dict>
+          </plist>
+          EOF
+
+      - name: Package Framework
+        run: |
+          zip -r duckdb-spatial-framework-ios.zip duckdb-spatial.framework
+          echo "Framework size: $(du -h duckdb-spatial-framework-ios.zip | cut -f1)"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: duckdb-spatial-framework-ios
+          path: duckdb-spatial-framework-ios.zip
+
+      - name: Create GitHub Release
+        if: github.event.inputs.create_release != 'false'
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: ${{ needs.check-version.outputs.release_tag }}
+          name: "DuckDB ${{ needs.check-version.outputs.duckdb_version }} iOS with Spatial"
+          body: |
+            Pre-built DuckDB iOS framework with **Spatial extension** for version ${{ needs.check-version.outputs.duckdb_version }}.
+
+            **Architectures:** arm64 (device)
+            **Minimum iOS:** 12.0
+            **Extensions (statically linked):**
+            - `spatial` - Geospatial functions (ST_Point, ST_Distance, etc.)
+            - `icu` - Unicode/collation support
+            - `json` - JSON parsing and querying
+            - `parquet` - Parquet file format support
+
+            **Spatial Capabilities:**
+            - GEOMETRY types (Point, LineString, Polygon, etc.)
+            - Spatial functions (ST_Area, ST_Buffer, ST_Contains, etc.)
+            - WKT/WKB parsing
+            - GeoJSON support
+            - PROJ coordinate transformations (embedded database)
+
+            ⚠️ **Note:** Network features (GDAL remote, HTTPFS) are disabled for iOS.
+
+            Built from:
+            - [duckdb/duckdb v${{ needs.check-version.outputs.duckdb_version }}](https://github.com/duckdb/duckdb/releases/tag/v${{ needs.check-version.outputs.duckdb_version }})
+            - [duckdb/duckdb-spatial](https://github.com/duckdb/duckdb-spatial)
+          files: duckdb-spatial-framework-ios.zip
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

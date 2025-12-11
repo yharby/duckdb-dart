@@ -1,4 +1,4 @@
-name: Build Android Libraries
+name: Build Android with Spatial Extension
 
 on:
   workflow_dispatch:
@@ -11,12 +11,10 @@ on:
         description: 'Create a GitHub release'
         type: boolean
         default: true
-  schedule:
-    # Check for new DuckDB releases weekly (Sundays at 1am, after iOS build)
-    - cron: '0 1 * * 0'
 
 env:
   DUCKDB_REPO: duckdb/duckdb
+  SPATIAL_REPO: duckdb/duckdb-spatial
 
 jobs:
   check-version:
@@ -35,17 +33,16 @@ jobs:
           if [ -n "${{ github.event.inputs.duckdb_version }}" ]; then
             VERSION="${{ github.event.inputs.duckdb_version }}"
           else
-            # Get latest DuckDB release version
             VERSION=$(curl -s https://api.github.com/repos/${{ env.DUCKDB_REPO }}/releases/latest | jq -r '.tag_name' | sed 's/^v//')
           fi
           echo "version=$VERSION" >> $GITHUB_OUTPUT
-          echo "release_tag=v${VERSION}-android" >> $GITHUB_OUTPUT
+          echo "release_tag=v${VERSION}-android-spatial" >> $GITHUB_OUTPUT
           echo "DuckDB version: $VERSION"
 
       - name: Check if release already exists
         id: check_existing
         run: |
-          RELEASE_TAG="v${{ steps.get_version.outputs.version }}-android"
+          RELEASE_TAG="v${{ steps.get_version.outputs.version }}-android-spatial"
           if gh release view "$RELEASE_TAG" --repo ${{ github.repository }} &>/dev/null; then
             echo "Release $RELEASE_TAG already exists"
             echo "should_build=false" >> $GITHUB_OUTPUT
@@ -56,7 +53,7 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-  build-android:
+  build-android-spatial:
     needs: check-version
     if: needs.check-version.outputs.should_build == 'true'
     runs-on: ubuntu-latest
@@ -65,10 +62,13 @@ jobs:
         abi: [arm64-v8a, armeabi-v7a, x86_64]
         include:
           - abi: arm64-v8a
+            vcpkg_triplet: arm64-android
             duckdb_platform: linux_arm64
           - abi: armeabi-v7a
+            vcpkg_triplet: arm-android
             duckdb_platform: linux_arm64
           - abi: x86_64
+            vcpkg_triplet: x64-android
             duckdb_platform: linux_amd64
     steps:
       - name: Checkout
@@ -80,67 +80,90 @@ jobs:
         with:
           ndk-version: r26b
 
-      - name: Install Ninja
-        run: sudo apt-get install -y ninja-build
+      - name: Install build tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ninja-build cmake pkg-config
 
-      - name: Download DuckDB source
+      - name: Clone DuckDB Spatial
         run: |
           DUCKDB_VERSION="${{ needs.check-version.outputs.duckdb_version }}"
-          echo "Building DuckDB version: $DUCKDB_VERSION for ${{ matrix.abi }}"
-          curl -L -o duckdb.zip "https://github.com/${{ env.DUCKDB_REPO }}/archive/refs/tags/v${DUCKDB_VERSION}.zip"
-          unzip duckdb.zip
-          mv duckdb-${DUCKDB_VERSION} duckdb-src
+          echo "Building DuckDB Spatial for version: $DUCKDB_VERSION, ABI: ${{ matrix.abi }}"
 
-      - name: Build Android library
+          git clone --recurse-submodules https://github.com/${{ env.SPATIAL_REPO }}.git duckdb-spatial
+
+          cd duckdb-spatial/duckdb
+          git fetch --tags
+          git checkout "v${DUCKDB_VERSION}" || echo "Warning: Version mismatch, using default"
+
+      - name: Setup vcpkg for Android
+        run: |
+          cd duckdb-spatial
+
+          if [ ! -f "vcpkg/vcpkg" ]; then
+            git clone https://github.com/Microsoft/vcpkg.git vcpkg
+            ./vcpkg/bootstrap-vcpkg.sh
+          fi
+
+          echo "VCPKG_ROOT=$(pwd)/vcpkg" >> $GITHUB_ENV
+
+      - name: Build Spatial Extension for Android
         env:
           ANDROID_NDK_HOME: ${{ steps.setup-ndk.outputs.ndk-path }}
-          # Set DUCKDB_PLATFORM to avoid cross-compile platform detection issue
-          # The duckdb_platform_binary is built for Android but runs on host
           DUCKDB_PLATFORM: ${{ matrix.duckdb_platform }}
         run: |
-          cd duckdb-src
-          mkdir -p build
-          cd build
+          cd duckdb-spatial
+          mkdir -p build/${{ matrix.abi }}
+          cd build/${{ matrix.abi }}
 
-          # Build with core_functions, icu, parquet, json extensions built-in
-          cmake -G Ninja \
+          # Configure for Android with spatial extension
+          cmake ../.. \
+            -G Ninja \
             -DCMAKE_TOOLCHAIN_FILE=$ANDROID_NDK_HOME/build/cmake/android.toolchain.cmake \
             -DANDROID_ABI=${{ matrix.abi }} \
-            -DANDROID_PLATFORM=android-21 \
+            -DANDROID_PLATFORM=android-24 \
             -DANDROID_STL=c++_static \
             -DCMAKE_BUILD_TYPE=Release \
             -DCMAKE_POSITION_INDEPENDENT_CODE=ON \
             -DBUILD_SHARED_LIBS=ON \
             -DBUILD_UNITTESTS=OFF \
             -DBUILD_SHELL=OFF \
-            -DBUILD_EXTENSIONS="icu;parquet;json" \
-            -DENABLE_EXTENSION_AUTOLOADING=OFF \
-            -DENABLE_EXTENSION_AUTOINSTALL=OFF \
             -DEXTENSION_STATIC_BUILD=ON \
+            -DBUILD_EXTENSIONS="icu;json;parquet" \
+            -DSPATIAL_USE_NETWORK=OFF \
             -DDUCKDB_EXPLICIT_PLATFORM=${{ matrix.duckdb_platform }} \
-            ..
+            -DVCPKG_TARGET_TRIPLET=${{ matrix.vcpkg_triplet }} \
+            -DCMAKE_TOOLCHAIN_FILE=$VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake \
+            -DVCPKG_CHAINLOAD_TOOLCHAIN_FILE=$ANDROID_NDK_HOME/build/cmake/android.toolchain.cmake
 
           cmake --build . --config Release --parallel
 
-          # Strip debug symbols to reduce size
-          $ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-strip --strip-debug src/libduckdb.so
+          # Strip debug symbols
+          $ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-strip --strip-debug src/libduckdb.so || true
 
       - name: Package library
         run: |
           mkdir -p output
-          cp duckdb-src/build/src/libduckdb.so output/
+          LIBFILE=$(find duckdb-spatial/build/${{ matrix.abi }} -name "libduckdb.so" | head -1)
+          if [ -n "$LIBFILE" ]; then
+            cp "$LIBFILE" output/
+          else
+            echo "ERROR: Could not find libduckdb.so"
+            find duckdb-spatial/build/${{ matrix.abi }} -name "*.so" | head -10
+            exit 1
+          fi
           cd output
-          zip libduckdb-android_${{ matrix.abi }}.zip libduckdb.so
-          echo "Library size: $(du -h libduckdb-android_${{ matrix.abi }}.zip | cut -f1)"
+          zip libduckdb-spatial-android_${{ matrix.abi }}.zip libduckdb.so
+          echo "Library size: $(du -h libduckdb-spatial-android_${{ matrix.abi }}.zip | cut -f1)"
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: libduckdb-android_${{ matrix.abi }}
-          path: output/libduckdb-android_${{ matrix.abi }}.zip
+          name: libduckdb-spatial-android_${{ matrix.abi }}
+          path: output/libduckdb-spatial-android_${{ matrix.abi }}.zip
 
   create-release:
-    needs: [check-version, build-android]
+    needs: [check-version, build-android-spatial]
     if: github.event.inputs.create_release != 'false'
     runs-on: ubuntu-latest
     steps:
@@ -156,27 +179,37 @@ jobs:
         uses: softprops/action-gh-release@v1
         with:
           tag_name: ${{ needs.check-version.outputs.release_tag }}
-          name: "DuckDB ${{ needs.check-version.outputs.duckdb_version }} Android Libraries"
+          name: "DuckDB ${{ needs.check-version.outputs.duckdb_version }} Android with Spatial"
           body: |
-            Pre-built DuckDB Android libraries for version ${{ needs.check-version.outputs.duckdb_version }}.
+            Pre-built DuckDB Android libraries with **Spatial extension** for version ${{ needs.check-version.outputs.duckdb_version }}.
 
             **Architectures:**
             - arm64-v8a (64-bit ARM devices)
             - armeabi-v7a (32-bit ARM devices)
             - x86_64 (x86 emulator)
 
-            **Minimum Android SDK:** 21
+            **Minimum Android SDK:** 24
             **Extensions (statically linked):**
+            - `spatial` - Geospatial functions (ST_Point, ST_Distance, etc.)
             - `icu` - Unicode/collation support
             - `json` - JSON parsing and querying
             - `parquet` - Parquet file format support
 
-            Built automatically from [duckdb/duckdb v${{ needs.check-version.outputs.duckdb_version }}](https://github.com/duckdb/duckdb/releases/tag/v${{ needs.check-version.outputs.duckdb_version }})
+            **Spatial Capabilities:**
+            - GEOMETRY types (Point, LineString, Polygon, etc.)
+            - Spatial functions (ST_Area, ST_Buffer, ST_Contains, etc.)
+            - WKT/WKB parsing
+            - GeoJSON support
+            - PROJ coordinate transformations (embedded database)
 
-            **Note:** For geospatial features (spatial), see the separate spatial build workflow.
+            ⚠️ **Note:** Network features (GDAL remote, HTTPFS) are disabled for Android.
+
+            Built from:
+            - [duckdb/duckdb v${{ needs.check-version.outputs.duckdb_version }}](https://github.com/duckdb/duckdb/releases/tag/v${{ needs.check-version.outputs.duckdb_version }})
+            - [duckdb/duckdb-spatial](https://github.com/duckdb/duckdb-spatial)
           files: |
-            artifacts/libduckdb-android_arm64-v8a/libduckdb-android_arm64-v8a.zip
-            artifacts/libduckdb-android_armeabi-v7a/libduckdb-android_armeabi-v7a.zip
-            artifacts/libduckdb-android_x86_64/libduckdb-android_x86_64.zip
+            artifacts/libduckdb-spatial-android_arm64-v8a/libduckdb-spatial-android_arm64-v8a.zip
+            artifacts/libduckdb-spatial-android_armeabi-v7a/libduckdb-spatial-android_armeabi-v7a.zip
+            artifacts/libduckdb-spatial-android_x86_64/libduckdb-spatial-android_x86_64.zip
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

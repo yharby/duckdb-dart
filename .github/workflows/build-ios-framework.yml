@@ -11,12 +11,18 @@ on:
         description: 'Create a GitHub release'
         type: boolean
         default: true
+      build_spatial:
+        description: 'Build with spatial extension (experimental)'
+        type: boolean
+        default: false
   schedule:
     # Check for new DuckDB releases weekly (Sundays at midnight)
     - cron: '0 0 * * 0'
 
 env:
   DUCKDB_REPO: duckdb/duckdb
+  # Core extensions to include (built-in to DuckDB source)
+  CORE_EXTENSIONS: "icu;json;parquet"
 
 jobs:
   check-version:
@@ -82,15 +88,19 @@ jobs:
           mkdir -p build/ios-arm64
           cd build/ios-arm64
 
+          # Build with core extensions statically linked for iOS
+          # Extensions: icu (unicode), json, parquet (columnar storage)
           cmake ../.. \
             -G Xcode \
             -DCMAKE_SYSTEM_NAME=iOS \
             -DCMAKE_OSX_ARCHITECTURES=arm64 \
-            -DCMAKE_OSX_DEPLOYMENT_TARGET=11.0 \
+            -DCMAKE_OSX_DEPLOYMENT_TARGET=12.0 \
             -DBUILD_SHELL=OFF \
-            -DBUILD_EXTENSIONS=OFF \
-            -DBUILD_HTTPFS_EXTENSION=OFF \
-            -DBUILD_JSON_EXTENSION=ON
+            -DBUILD_UNITTESTS=OFF \
+            -DEXTENSION_STATIC_BUILD=ON \
+            -DENABLE_EXTENSION_AUTOLOADING=OFF \
+            -DENABLE_EXTENSION_AUTOINSTALL=OFF \
+            -DBUILD_EXTENSIONS="${{ env.CORE_EXTENSIONS }}"
 
           cmake --build . --config Release --target duckdb
 
@@ -105,11 +115,13 @@ jobs:
             -DCMAKE_SYSTEM_NAME=iOS \
             -DCMAKE_OSX_SYSROOT=iphonesimulator \
             -DCMAKE_OSX_ARCHITECTURES="arm64;x86_64" \
-            -DCMAKE_OSX_DEPLOYMENT_TARGET=11.0 \
+            -DCMAKE_OSX_DEPLOYMENT_TARGET=12.0 \
             -DBUILD_SHELL=OFF \
-            -DBUILD_EXTENSIONS=OFF \
-            -DBUILD_HTTPFS_EXTENSION=OFF \
-            -DBUILD_JSON_EXTENSION=ON
+            -DBUILD_UNITTESTS=OFF \
+            -DEXTENSION_STATIC_BUILD=ON \
+            -DENABLE_EXTENSION_AUTOLOADING=OFF \
+            -DENABLE_EXTENSION_AUTOINSTALL=OFF \
+            -DBUILD_EXTENSIONS="${{ env.CORE_EXTENSIONS }}"
 
           cmake --build . --config Release --target duckdb
 
@@ -178,11 +190,16 @@ jobs:
           body: |
             Pre-built DuckDB iOS framework for version ${{ needs.check-version.outputs.duckdb_version }}.
 
-            **Architectures:** arm64 (device)
-            **Minimum iOS:** 11.0
-            **Extensions:** JSON
+            **Architectures:** arm64 (device), arm64+x86_64 (simulator)
+            **Minimum iOS:** 12.0
+            **Extensions (statically linked):**
+            - `icu` - Unicode/collation support
+            - `json` - JSON parsing and querying
+            - `parquet` - Parquet file format support
 
             Built automatically from [duckdb/duckdb v${{ needs.check-version.outputs.duckdb_version }}](https://github.com/duckdb/duckdb/releases/tag/v${{ needs.check-version.outputs.duckdb_version }})
+
+            **Note:** For geospatial features (spatial, h3), see the separate spatial build workflow.
           files: duckdb-framework-ios.zip
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
