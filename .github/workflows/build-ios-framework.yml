@@ -149,6 +149,9 @@ jobs:
             -DBUILD_EXTENSIONS="${{ env.CORE_EXTENSIONS }}" \
             -DDUCKDB_EXPLICIT_PLATFORM=osx_arm64 \
             -DOPENSSL_ROOT_DIR=$OPENSSL_ROOT_DIR_IOS \
+            -DOPENSSL_INCLUDE_DIR=$OPENSSL_ROOT_DIR_IOS/include \
+            -DOPENSSL_CRYPTO_LIBRARY=$OPENSSL_ROOT_DIR_IOS/lib/libcrypto.a \
+            -DOPENSSL_SSL_LIBRARY=$OPENSSL_ROOT_DIR_IOS/lib/libssl.a \
             -DOPENSSL_USE_STATIC_LIBS=TRUE
 
           cmake --build . --parallel
@@ -177,6 +180,9 @@ jobs:
             -DBUILD_EXTENSIONS="${{ env.CORE_EXTENSIONS }}" \
             -DDUCKDB_EXPLICIT_PLATFORM=osx_arm64 \
             -DOPENSSL_ROOT_DIR=$OPENSSL_ROOT_DIR_SIM \
+            -DOPENSSL_INCLUDE_DIR=$OPENSSL_ROOT_DIR_SIM/include \
+            -DOPENSSL_CRYPTO_LIBRARY=$OPENSSL_ROOT_DIR_SIM/lib/libcrypto.a \
+            -DOPENSSL_SSL_LIBRARY=$OPENSSL_ROOT_DIR_SIM/lib/libssl.a \
             -DOPENSSL_USE_STATIC_LIBS=TRUE
           cmake --build . --parallel
           cd ..
@@ -199,6 +205,9 @@ jobs:
             -DBUILD_EXTENSIONS="${{ env.CORE_EXTENSIONS }}" \
             -DDUCKDB_EXPLICIT_PLATFORM=osx_amd64 \
             -DOPENSSL_ROOT_DIR=$OPENSSL_ROOT_DIR_SIM \
+            -DOPENSSL_INCLUDE_DIR=$OPENSSL_ROOT_DIR_SIM/include \
+            -DOPENSSL_CRYPTO_LIBRARY=$OPENSSL_ROOT_DIR_SIM/lib/libcrypto.a \
+            -DOPENSSL_SSL_LIBRARY=$OPENSSL_ROOT_DIR_SIM/lib/libssl.a \
             -DOPENSSL_USE_STATIC_LIBS=TRUE
           cmake --build . --parallel
 
