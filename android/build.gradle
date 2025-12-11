@@ -47,23 +47,48 @@ android {
         minSdkVersion 21 //current flutter min sdk version
 
         ndk {
-            abiFilters 'arm64-v8a', 'armeabi-v7a'
+            // arm64-v8a: 64-bit ARM devices (most modern phones)
+            // armeabi-v7a: 32-bit ARM devices (older phones)
+            // x86_64: Android emulator on x86 hosts
+            abiFilters 'arm64-v8a', 'armeabi-v7a', 'x86_64'
         }
     }
 }
 
 def jniLibsDir = "$projectDir/src/main/jniLibs"
 
-def zipFiles = [
-    'arm64-v8a': 'https://github.com/TigerEyeLabs/duckdb-dart/releases/download/v1.4.4/libduckdb-android_arm64-v8a.zip',
-    'armeabi-v7a': 'https://github.com/TigerEyeLabs/duckdb-dart/releases/download/v1.4.4/libduckdb-android_armeabi-v7a.zip'
-]
+// GitHub repository for downloading pre-built Android libraries
+// Uses yharby/duckdb-dart fork which has Android binaries properly uploaded
+def githubRepo = "yharby/duckdb-dart"
+def fallbackVersion = "v1.4.4-android"
+
+// ABIs to download - includes x86_64 for emulator support
+def supportedAbis = ['arm64-v8a', 'armeabi-v7a', 'x86_64']
 
 task downloadAndExtractDuckDB {
     doLast {
-        zipFiles.each { abi, url ->
+        // Try to get latest Android release from GitHub API, fallback to known version
+        def releaseTag = fallbackVersion
+        try {
+            def apiUrl = "https://api.github.com/repos/${githubRepo}/releases"
+            def connection = new URL(apiUrl).openConnection()
+            connection.setRequestProperty("Accept", "application/vnd.github.v3+json")
+            def response = connection.inputStream.text
+
+            // Find first release with "-android" in the tag
+            def matcher = response =~ /"tag_name"\s*:\s*"(v[^"]*-android)"/
+            if (matcher.find()) {
+                releaseTag = matcher.group(1)
+                println "Found latest Android release: $releaseTag"
+            }
+        } catch (Exception e) {
+            println "Could not fetch latest release, using fallback: $fallbackVersion"
+        }
+
+        supportedAbis.each { abi ->
             def libDir = file("$jniLibsDir/$abi")
             def libFile = file("$libDir/libduckdb.so")
+
             if (!libFile.exists()) {
                 def tmpDir = file("$buildDir/tmp")
                 tmpDir.mkdirs()
@@ -72,22 +97,37 @@ task downloadAndExtractDuckDB {
                 // Ensure the jniLibs directory for this ABI exists
                 libDir.mkdirs()
 
+                def url = "https://github.com/${githubRepo}/releases/download/${releaseTag}/libduckdb-android_${abi}.zip"
+
                 // Download the zip file
-                println "Downloading $url"
-                new URL(url).withInputStream { i ->
-                    zipFile.withOutputStream { it << i }
-                }
+                println "Downloading DuckDB for $abi from: $url"
+                try {
+                    new URL(url).withInputStream { i ->
+                        zipFile.withOutputStream { it << i }
+                    }
 
-                // Extract the zip file
-                println "Extracting to $libDir"
-                copy {
-                    from zipTree(zipFile)
-                    into libDir
-                    include "*.so"
-                }
+                    // Verify download succeeded (file should be > 1MB)
+                    if (zipFile.length() < 1000000) {
+                        println "WARNING: Downloaded file for $abi is too small (${zipFile.length()} bytes), may have failed"
+                        println "Content: ${zipFile.text.take(500)}"
+                        return // Skip this ABI
+                    }
 
-                // Clean up the zip file
-                delete zipFile
+                    // Extract the zip file
+                    println "Extracting to $libDir"
+                    copy {
+                        from zipTree(zipFile)
+                        into libDir
+                        include "*.so"
+                    }
+
+                    // Clean up the zip file
+                    delete zipFile
+                    println "Successfully installed DuckDB library for $abi"
+                } catch (Exception e) {
+                    println "WARNING: Failed to download DuckDB for $abi: ${e.message}"
+                    println "Skipping $abi - build may fail if this architecture is required"
+                }
             } else {
                 println "Library for $abi already exists, skipping download"
             }
