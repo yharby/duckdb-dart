@@ -103,14 +103,16 @@ jobs:
           cp ${OPENSSL_PACKAGE}/lib/iOS-simulator/libcrypto.a openssl-sim/lib/
           cp -r ${OPENSSL_PACKAGE}/include/openssl openssl-sim/include/
 
-          # Create cURL directory structure for iOS device
+          # Create cURL directory structure for iOS device (includes nghttp2 dependency)
           mkdir -p curl-ios/lib curl-ios/include
           cp ${OPENSSL_PACKAGE}/lib/iOS/libcurl.a curl-ios/lib/
+          cp ${OPENSSL_PACKAGE}/lib/iOS/libnghttp2.a curl-ios/lib/
           cp -r ${OPENSSL_PACKAGE}/include/curl curl-ios/include/
 
-          # Create cURL directory structure for iOS simulator
+          # Create cURL directory structure for iOS simulator (includes nghttp2 dependency)
           mkdir -p curl-sim/lib curl-sim/include
           cp ${OPENSSL_PACKAGE}/lib/iOS-simulator/libcurl.a curl-sim/lib/
+          cp ${OPENSSL_PACKAGE}/lib/iOS-simulator/libnghttp2.a curl-sim/lib/
           cp -r ${OPENSSL_PACKAGE}/include/curl curl-sim/include/
 
           # Verify structure
@@ -127,6 +129,8 @@ jobs:
           echo "OPENSSL_ROOT_DIR_SIM=$(pwd)/openssl-sim" >> $GITHUB_ENV
           echo "CURL_ROOT_DIR_IOS=$(pwd)/curl-ios" >> $GITHUB_ENV
           echo "CURL_ROOT_DIR_SIM=$(pwd)/curl-sim" >> $GITHUB_ENV
+          echo "NGHTTP2_LIB_IOS=$(pwd)/curl-ios/lib/libnghttp2.a" >> $GITHUB_ENV
+          echo "NGHTTP2_LIB_SIM=$(pwd)/curl-sim/lib/libnghttp2.a" >> $GITHUB_ENV
 
       - name: Clone DuckDB source
         run: |
@@ -148,6 +152,7 @@ jobs:
           # Build with core extensions statically linked for iOS
           # Using Ninja generator to avoid Xcode code signing requirements
           # Extensions: icu (unicode), json, parquet (columnar storage), httpfs (HTTP/S3)
+          # libcurl depends on nghttp2 and zlib - include them via CURL_LIBRARY
           cmake ../.. \
             -G Ninja \
             -DCMAKE_SYSTEM_NAME=iOS \
@@ -167,7 +172,7 @@ jobs:
             -DOPENSSL_SSL_LIBRARY=$OPENSSL_ROOT_DIR_IOS/lib/libssl.a \
             -DOPENSSL_USE_STATIC_LIBS=TRUE \
             -DCURL_INCLUDE_DIR=$CURL_ROOT_DIR_IOS/include \
-            -DCURL_LIBRARY=$CURL_ROOT_DIR_IOS/lib/libcurl.a
+            -DCURL_LIBRARY="$CURL_ROOT_DIR_IOS/lib/libcurl.a;$NGHTTP2_LIB_IOS;-lz"
 
           cmake --build . --parallel
 
@@ -200,7 +205,7 @@ jobs:
             -DOPENSSL_SSL_LIBRARY=$OPENSSL_ROOT_DIR_SIM/lib/libssl.a \
             -DOPENSSL_USE_STATIC_LIBS=TRUE \
             -DCURL_INCLUDE_DIR=$CURL_ROOT_DIR_SIM/include \
-            -DCURL_LIBRARY=$CURL_ROOT_DIR_SIM/lib/libcurl.a
+            -DCURL_LIBRARY="$CURL_ROOT_DIR_SIM/lib/libcurl.a;$NGHTTP2_LIB_SIM;-lz"
           cmake --build . --parallel
           cd ..
 
@@ -227,7 +232,7 @@ jobs:
             -DOPENSSL_SSL_LIBRARY=$OPENSSL_ROOT_DIR_SIM/lib/libssl.a \
             -DOPENSSL_USE_STATIC_LIBS=TRUE \
             -DCURL_INCLUDE_DIR=$CURL_ROOT_DIR_SIM/include \
-            -DCURL_LIBRARY=$CURL_ROOT_DIR_SIM/lib/libcurl.a
+            -DCURL_LIBRARY="$CURL_ROOT_DIR_SIM/lib/libcurl.a;$NGHTTP2_LIB_SIM;-lz"
           cmake --build . --parallel
 
       - name: Create Frameworks and XCFramework
