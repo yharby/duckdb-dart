@@ -88,6 +88,19 @@ jobs:
       - name: Install Ninja
         run: sudo apt-get install -y ninja-build
 
+      - name: Download OpenSSL and cURL for Android
+        run: |
+          # Download pre-built OpenSSL and cURL static libraries from robertying/openssl-curl-android
+          # This provides OpenSSL 1.1.1l and curl 7.78.0 static libs for all Android ABIs
+          curl -L -o openssl-curl.tar.gz "https://github.com/robertying/openssl-curl-android/releases/download/1.1.1l-7.78.0/build.tar.gz"
+          tar xzf openssl-curl.tar.gz
+
+          # Verify structure
+          echo "=== OpenSSL for ${{ matrix.abi }} ==="
+          ls -la build/openssl/${{ matrix.abi }}/lib/
+          echo "=== cURL for ${{ matrix.abi }} ==="
+          ls -la build/curl/${{ matrix.abi }}/lib/
+
       - name: Download DuckDB source
         run: |
           DUCKDB_VERSION="${{ needs.check-version.outputs.duckdb_version }}"
@@ -107,7 +120,11 @@ jobs:
           mkdir -p build
           cd build
 
-          # Build with core_functions, icu, parquet, json extensions built-in
+          # Set OpenSSL and cURL paths for the current ABI
+          OPENSSL_ROOT=$(pwd)/../../build/openssl/${{ matrix.abi }}
+          CURL_ROOT=$(pwd)/../../build/curl/${{ matrix.abi }}
+
+          # Build with core_functions, icu, parquet, json, httpfs extensions built-in
           cmake -G Ninja \
             -DCMAKE_TOOLCHAIN_FILE=$ANDROID_NDK_HOME/build/cmake/android.toolchain.cmake \
             -DANDROID_ABI=${{ matrix.abi }} \
@@ -123,6 +140,13 @@ jobs:
             -DENABLE_EXTENSION_AUTOINSTALL=OFF \
             -DEXTENSION_STATIC_BUILD=ON \
             -DDUCKDB_EXPLICIT_PLATFORM=${{ matrix.duckdb_platform }} \
+            -DOPENSSL_ROOT_DIR=$OPENSSL_ROOT \
+            -DOPENSSL_INCLUDE_DIR=$OPENSSL_ROOT/include \
+            -DOPENSSL_CRYPTO_LIBRARY=$OPENSSL_ROOT/lib/libcrypto.a \
+            -DOPENSSL_SSL_LIBRARY=$OPENSSL_ROOT/lib/libssl.a \
+            -DOPENSSL_USE_STATIC_LIBS=TRUE \
+            -DCURL_INCLUDE_DIR=$CURL_ROOT/include \
+            -DCURL_LIBRARY=$CURL_ROOT/lib/libcurl.a \
             ..
 
           cmake --build . --config Release --parallel
