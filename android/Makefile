@@ -1,10 +1,10 @@
 # Variables
-VERSION = v1.4.2
+VERSION = v1.4.3
 DUCKDB_REPO = https://github.com/duckdb/duckdb
 DUCKDB_DIR = duckdb
 BUILD_DIR = $(DUCKDB_DIR)/build
 LIB_DIR = src/main/jniLibs/
-EXTENSIONS = 'icu;parquet;json;autocomplete'
+EXTENSIONS = 'icu;parquet;json;autocomplete;httpfs'
 
 ifndef ANDROID_NDK_HOME
 # https://developer.android.com/studio

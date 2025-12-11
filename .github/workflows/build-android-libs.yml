@@ -118,7 +118,7 @@ jobs:
             -DBUILD_SHARED_LIBS=ON \
             -DBUILD_UNITTESTS=OFF \
             -DBUILD_SHELL=OFF \
-            -DBUILD_EXTENSIONS="icu;parquet;json" \
+            -DBUILD_EXTENSIONS="icu;parquet;json;httpfs" \
             -DENABLE_EXTENSION_AUTOLOADING=OFF \
             -DENABLE_EXTENSION_AUTOINSTALL=OFF \
             -DEXTENSION_STATIC_BUILD=ON \
@@ -175,6 +175,7 @@ jobs:
             - `icu` - Unicode/collation support
             - `json` - JSON parsing and querying
             - `parquet` - Parquet file format support
+            - `httpfs` - HTTP/HTTPS and S3 file system support
 
             Built automatically from [duckdb/duckdb v${{ needs.check-version.outputs.duckdb_version }}](https://github.com/duckdb/duckdb/releases/tag/v${{ needs.check-version.outputs.duckdb_version }})
 

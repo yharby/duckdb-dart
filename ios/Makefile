@@ -1,4 +1,4 @@
-VERSION = v1.4.2
+VERSION = v1.4.3
 DUCKDB_REPO = https://github.com/duckdb/duckdb
 DUCKDB_DIR = ./duckdb
 IOS_PLATFORM_SIMULATOR = iPhoneSimulator
@@ -33,7 +33,7 @@ sim_x64: destination duckdb ## Simulator build for ARM64
 	@export OSX_BUILD_ARCH='x86_64'; \
 	export IOS_PLATFORM=$(IOS_PLATFORM_SIMULATOR) \
 	export DUCKDB_PLATFORM=osx_amd64; \
-	export DUCKDB_EXTENSIONS='icu;parquet;json;autocomplete'; \
+	export DUCKDB_EXTENSIONS='icu;parquet;json;autocomplete;httpfs'; \
 	make -C $(DUCKDB_DIR) GEN=ninja release; \
 	cp $(DUCKDB_DIR)/src/include/duckdb.h $(DUCKDB_DIR)/build/release/src/duckdb.framework/Headers
 	mv $(DUCKDB_DIR)/build/release/src/duckdb.framework ./Libraries/release/duckdb_x64.framework
@@ -42,7 +42,7 @@ sim_arm64: destination duckdb ## Simulator build for ARM64
 	@export OSX_BUILD_ARCH='arm64'; \
 	export IOS_PLATFORM=$(IOS_PLATFORM_SIMULATOR) \
 	export DUCKDB_PLATFORM=osx_arm64; \
-	export DUCKDB_EXTENSIONS='icu;parquet;json;autocomplete'; \
+	export DUCKDB_EXTENSIONS='icu;parquet;json;autocomplete;httpfs'; \
 	make -C $(DUCKDB_DIR) GEN=ninja release; \
 	cp $(DUCKDB_DIR)/src/include/duckdb.h $(DUCKDB_DIR)/build/release/src/duckdb.framework/Headers
 	mv $(DUCKDB_DIR)/build/release/src/duckdb.framework ./Libraries/release/duckdb_arm64.framework
@@ -56,7 +56,7 @@ simulator: destination sim_arm64 clean sim_x64 ## Univerasl iOS Simulator Build
 device: destination duckdb ## iOS Hardware Build
 device:
 	@export IOS_PLATFORM=$(IOS_PLATFORM_DEVICE) \
-	export DUCKDB_EXTENSIONS='icu;parquet;json;autocomplete'; \
+	export DUCKDB_EXTENSIONS='icu;parquet;json;autocomplete;httpfs'; \
 	export DUCKDB_PLATFORM=osx_arm64; \
 	make -C $(DUCKDB_DIR) GEN=ninja release; \
 	cp $(DUCKDB_DIR)/src/include/duckdb.h $(DUCKDB_DIR)/build/release/src/duckdb.framework/Headers

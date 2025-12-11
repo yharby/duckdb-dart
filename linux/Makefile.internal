@@ -1,4 +1,4 @@
-VERSION = v1.4.2
+VERSION = v1.4.3
 DUCKDB_REPO = https://github.com/duckdb/duckdb
 DUCKDB_DIR = ./duckdb
 EXTENSION_DIR = $(DUCKDB_DIR)/extension

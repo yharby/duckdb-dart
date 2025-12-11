@@ -2,7 +2,7 @@
 
 ## 1.4.4
 
-- upgrade duckdb binaries to 1.4.2
+- upgrade duckdb binaries to
 - introduce the JsonValue for Json columns
 
 ## 1.4.3
@@ -23,9 +23,11 @@
 - bump duckdb version
 
 ## 1.2.0
+
 - ✨ Added Web support via DuckDB WASM
 
 ## 1.1.3
+
 - ✨ Added support for all DuckDB datatypes
 - ✨ Added streaming query results
 - ⚡️ Improved query performance with faster datachunk indexing
@@ -34,16 +36,21 @@
 - 📦 Reduced Android binary size by removing unused symbols
 
 ## 1.1.0
+
 - ✨ Added support for cancellable queries via DuckDB's pending results
 
 ## 1.0.3
+
 - 📝 Minor documentation updates
 
 ## 1.0.2
+
 - 🔧 Auto-download DuckDB builds during build process for Android/Windows/Linux/macOS
 
 ## 1.0.1
+
 - 🐛 Fixed pub.dev publishing issues
 
 ## 1.0.0
+
 - 🎉 Initial release

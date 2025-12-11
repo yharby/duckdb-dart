@@ -22,7 +22,7 @@ on:
 env:
   DUCKDB_REPO: duckdb/duckdb
   # Core extensions to include (built-in to DuckDB source)
-  CORE_EXTENSIONS: "icu;json;parquet"
+  CORE_EXTENSIONS: "icu;json;parquet;httpfs"
 
 jobs:
   check-version:
@@ -245,6 +245,7 @@ jobs:
             - `icu` - Unicode/collation support
             - `json` - JSON parsing and querying
             - `parquet` - Parquet file format support
+            - `httpfs` - HTTP/HTTPS and S3 file system support
 
             Built automatically from [duckdb/duckdb v${{ needs.check-version.outputs.duckdb_version }}](https://github.com/duckdb/duckdb/releases/tag/v${{ needs.check-version.outputs.duckdb_version }})
 
