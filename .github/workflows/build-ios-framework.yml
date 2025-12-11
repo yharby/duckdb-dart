@@ -83,6 +83,26 @@ jobs:
       - name: Install Ninja
         run: brew install ninja
 
+      - name: Download OpenSSL for iOS
+        run: |
+          # Download pre-built OpenSSL XCFramework from krzyzanowskim/OpenSSL
+          # This provides OpenSSL 3.x for iOS (arm64) and iOS Simulator (arm64, x86_64)
+          curl -L -o OpenSSL.xcframework.zip https://github.com/krzyzanowskim/OpenSSL/releases/download/3.6.0001/OpenSSL.xcframework.zip
+          unzip OpenSSL.xcframework.zip
+
+          # Find the iOS device library path
+          IOS_DEVICE_PATH=$(pwd)/OpenSSL.xcframework/ios-arm64
+          IOS_SIM_PATH=$(pwd)/OpenSSL.xcframework/ios-arm64_x86_64-simulator
+
+          echo "OpenSSL iOS Device path: $IOS_DEVICE_PATH"
+          echo "OpenSSL iOS Simulator path: $IOS_SIM_PATH"
+          ls -la $IOS_DEVICE_PATH/ || true
+          ls -la $IOS_SIM_PATH/ || true
+
+          # Set environment variables for CMake
+          echo "OPENSSL_ROOT_DIR_IOS=$IOS_DEVICE_PATH" >> $GITHUB_ENV
+          echo "OPENSSL_ROOT_DIR_SIM=$IOS_SIM_PATH" >> $GITHUB_ENV
+
       - name: Clone DuckDB source
         run: |
           DUCKDB_VERSION="${{ needs.check-version.outputs.duckdb_version }}"
@@ -102,7 +122,7 @@ jobs:
 
           # Build with core extensions statically linked for iOS
           # Using Ninja generator to avoid Xcode code signing requirements
-          # Extensions: icu (unicode), json, parquet (columnar storage)
+          # Extensions: icu (unicode), json, parquet (columnar storage), httpfs (HTTP/S3)
           cmake ../.. \
             -G Ninja \
             -DCMAKE_SYSTEM_NAME=iOS \
@@ -115,7 +135,9 @@ jobs:
             -DENABLE_EXTENSION_AUTOLOADING=OFF \
             -DENABLE_EXTENSION_AUTOINSTALL=OFF \
             -DBUILD_EXTENSIONS="${{ env.CORE_EXTENSIONS }}" \
-            -DDUCKDB_EXPLICIT_PLATFORM=osx_arm64
+            -DDUCKDB_EXPLICIT_PLATFORM=osx_arm64 \
+            -DOPENSSL_ROOT_DIR=$OPENSSL_ROOT_DIR_IOS \
+            -DOPENSSL_USE_STATIC_LIBS=TRUE
 
           cmake --build . --parallel
 
@@ -141,7 +163,9 @@ jobs:
             -DENABLE_EXTENSION_AUTOLOADING=OFF \
             -DENABLE_EXTENSION_AUTOINSTALL=OFF \
             -DBUILD_EXTENSIONS="${{ env.CORE_EXTENSIONS }}" \
-            -DDUCKDB_EXPLICIT_PLATFORM=osx_arm64
+            -DDUCKDB_EXPLICIT_PLATFORM=osx_arm64 \
+            -DOPENSSL_ROOT_DIR=$OPENSSL_ROOT_DIR_SIM \
+            -DOPENSSL_USE_STATIC_LIBS=TRUE
           cmake --build . --parallel
           cd ..
 
@@ -161,7 +185,9 @@ jobs:
             -DENABLE_EXTENSION_AUTOLOADING=OFF \
             -DENABLE_EXTENSION_AUTOINSTALL=OFF \
             -DBUILD_EXTENSIONS="${{ env.CORE_EXTENSIONS }}" \
-            -DDUCKDB_EXPLICIT_PLATFORM=osx_amd64
+            -DDUCKDB_EXPLICIT_PLATFORM=osx_amd64 \
+            -DOPENSSL_ROOT_DIR=$OPENSSL_ROOT_DIR_SIM \
+            -DOPENSSL_USE_STATIC_LIBS=TRUE
           cmake --build . --parallel
 
       - name: Create Frameworks and XCFramework
