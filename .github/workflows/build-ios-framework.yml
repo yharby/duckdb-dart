@@ -69,13 +69,12 @@ jobs:
         with:
           xcode-version: latest-stable
 
-      - name: Download DuckDB source
+      - name: Clone DuckDB source
         run: |
           DUCKDB_VERSION="${{ needs.check-version.outputs.duckdb_version }}"
           echo "Building DuckDB version: $DUCKDB_VERSION"
-          curl -L -o duckdb.zip "https://github.com/${{ env.DUCKDB_REPO }}/archive/refs/tags/v${DUCKDB_VERSION}.zip"
-          unzip duckdb.zip
-          mv duckdb-${DUCKDB_VERSION} duckdb-src
+          # Use git clone instead of zip download to properly handle symbolic links
+          git clone --depth 1 --branch "v${DUCKDB_VERSION}" "https://github.com/${{ env.DUCKDB_REPO }}.git" duckdb-src
 
       - name: Build iOS Framework (arm64)
         run: |
