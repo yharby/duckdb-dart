@@ -88,18 +88,38 @@ jobs:
       - name: Install Ninja
         run: sudo apt-get install -y ninja-build
 
-      - name: Download OpenSSL and cURL for Android
+      - name: Download OpenSSL, cURL, and nghttp2 for Android
         run: |
-          # Download pre-built OpenSSL and cURL static libraries from robertying/openssl-curl-android
-          # This provides OpenSSL 1.1.1l and curl 7.78.0 static libs for all Android ABIs
-          curl -L -o openssl-curl.tar.gz "https://github.com/robertying/openssl-curl-android/releases/download/1.1.1l-7.78.0/build.tar.gz"
-          tar xzf openssl-curl.tar.gz
+          # Download pre-built libraries from yharby/openssl_for_ios_and_android
+          # Built with correct API levels to avoid stdin/stderr symbol issues
+          RELEASE_TAG="ci-release-69311a04"
+          BASE_URL="https://github.com/yharby/openssl_for_ios_and_android/releases/download/${RELEASE_TAG}"
+
+          # Download OpenSSL 1.1.1w
+          curl -L -o openssl.zip "${BASE_URL}/openssl_1.1.1w-android-${{ matrix.abi }}.zip"
+          unzip -o openssl.zip -d openssl-tmp
+          mkdir -p openssl/${{ matrix.abi }}
+          mv openssl-tmp/* openssl/${{ matrix.abi }}/
+
+          # Download cURL 7.68.0
+          curl -L -o curl.zip "${BASE_URL}/curl_7.68.0-android-${{ matrix.abi }}.zip"
+          unzip -o curl.zip -d curl-tmp
+          mkdir -p curl/${{ matrix.abi }}
+          mv curl-tmp/* curl/${{ matrix.abi }}/
+
+          # Download nghttp2 1.40.0
+          curl -L -o nghttp2.zip "${BASE_URL}/nghttp2_1.40.0-android-${{ matrix.abi }}.zip"
+          unzip -o nghttp2.zip -d nghttp2-tmp
+          mkdir -p nghttp2/${{ matrix.abi }}
+          mv nghttp2-tmp/* nghttp2/${{ matrix.abi }}/
 
           # Verify structure
           echo "=== OpenSSL for ${{ matrix.abi }} ==="
-          ls -la build/openssl/${{ matrix.abi }}/lib/
+          ls -la openssl/${{ matrix.abi }}/lib/ || ls -la openssl/${{ matrix.abi }}/
           echo "=== cURL for ${{ matrix.abi }} ==="
-          ls -la build/curl/${{ matrix.abi }}/lib/
+          ls -la curl/${{ matrix.abi }}/lib/ || ls -la curl/${{ matrix.abi }}/
+          echo "=== nghttp2 for ${{ matrix.abi }} ==="
+          ls -la nghttp2/${{ matrix.abi }}/lib/ || ls -la nghttp2/${{ matrix.abi }}/
 
       - name: Download DuckDB source
         run: |
@@ -120,13 +140,14 @@ jobs:
           mkdir -p build
           cd build
 
-          # Set OpenSSL and cURL paths for the current ABI
-          OPENSSL_ROOT=$(pwd)/../../build/openssl/${{ matrix.abi }}
-          CURL_ROOT=$(pwd)/../../build/curl/${{ matrix.abi }}
+          # Set library paths for the current ABI
+          OPENSSL_ROOT=$(pwd)/../../openssl/${{ matrix.abi }}
+          CURL_ROOT=$(pwd)/../../curl/${{ matrix.abi }}
+          NGHTTP2_ROOT=$(pwd)/../../nghttp2/${{ matrix.abi }}
 
           # Build with icu, parquet, json, httpfs extensions statically linked into libduckdb.so
-          # Note: We do NOT use EXTENSION_STATIC_BUILD as that builds loadable .duckdb_extension files
-          # which fail to link against static OpenSSL due to stdin/stderr symbol issues
+          # SKIP_EXTENSIONS prevents building loadable .duckdb_extension files (which fail to link)
+          # Extensions are still linked into libduckdb.so via BUILD_EXTENSIONS
           cmake -G Ninja \
             -DCMAKE_TOOLCHAIN_FILE=$ANDROID_NDK_HOME/build/cmake/android.toolchain.cmake \
             -DANDROID_ABI=${{ matrix.abi }} \
@@ -138,6 +159,7 @@ jobs:
             -DBUILD_UNITTESTS=OFF \
             -DBUILD_SHELL=OFF \
             -DBUILD_EXTENSIONS="icu;parquet;json;httpfs" \
+            -DSKIP_EXTENSIONS="icu;parquet;json;httpfs;core_functions" \
             -DENABLE_EXTENSION_AUTOLOADING=OFF \
             -DENABLE_EXTENSION_AUTOINSTALL=OFF \
             -DDUCKDB_EXTRA_LINK_FLAGS="-llog" \
@@ -148,7 +170,7 @@ jobs:
             -DOPENSSL_SSL_LIBRARY=$OPENSSL_ROOT/lib/libssl.a \
             -DOPENSSL_USE_STATIC_LIBS=TRUE \
             -DCURL_INCLUDE_DIR=$CURL_ROOT/include \
-            -DCURL_LIBRARY=$CURL_ROOT/lib/libcurl.a \
+            -DCURL_LIBRARY="$CURL_ROOT/lib/libcurl.a;$NGHTTP2_ROOT/lib/libnghttp2.a;-lz" \
             ..
 
           cmake --build . --config Release --parallel
