@@ -87,8 +87,15 @@ jobs:
         run: |
           # Download pre-built OpenSSL XCFramework from krzyzanowskim/OpenSSL
           # This provides OpenSSL 3.x for iOS (arm64) and iOS Simulator (arm64, x86_64)
-          curl -L -o OpenSSL.xcframework.zip https://github.com/krzyzanowskim/OpenSSL/releases/download/3.6.0001/OpenSSL.xcframework.zip
+          # Use gh CLI for more reliable download from GitHub releases
+          gh release download 3.6.0001 --repo krzyzanowskim/OpenSSL --pattern "OpenSSL.xcframework.zip"
+
+          # Verify download
+          ls -la OpenSSL.xcframework.zip
           unzip OpenSSL.xcframework.zip
+
+          # List the XCFramework structure
+          ls -la OpenSSL.xcframework/
 
           # Find the iOS device library path
           IOS_DEVICE_PATH=$(pwd)/OpenSSL.xcframework/ios-arm64
@@ -102,6 +109,8 @@ jobs:
           # Set environment variables for CMake
           echo "OPENSSL_ROOT_DIR_IOS=$IOS_DEVICE_PATH" >> $GITHUB_ENV
           echo "OPENSSL_ROOT_DIR_SIM=$IOS_SIM_PATH" >> $GITHUB_ENV
+        env:
+          GH_TOKEN: ${{ github.token }}
 
       - name: Clone DuckDB source
         run: |
