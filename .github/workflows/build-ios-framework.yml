@@ -279,33 +279,32 @@ jobs:
           PLIST
           }
 
-          # Create device framework
-          mkdir -p duckdb-device.framework/Headers
-          cp duckdb-src/src/include/duckdb.h duckdb-device.framework/Headers/
-          cp "$DEVICE_LIB" duckdb-device.framework/duckdb
-          create_info_plist duckdb-device.framework/Info.plist
+          # Create device library directory with proper .a extension
+          mkdir -p duckdb-device/Headers
+          cp duckdb-src/src/include/duckdb.h duckdb-device/Headers/
+          cp "$DEVICE_LIB" duckdb-device/libduckdb.a
 
-          # Create simulator framework with fat binary (arm64 + x86_64)
+          # Create simulator library with fat binary (arm64 + x86_64)
           if [ -n "$SIM_ARM64" ] && [ -n "$SIM_X86" ]; then
             echo "Creating fat simulator library..."
-            mkdir -p duckdb-simulator.framework/Headers
-            cp duckdb-src/src/include/duckdb.h duckdb-simulator.framework/Headers/
-            lipo -create "$SIM_ARM64" "$SIM_X86" -output duckdb-simulator.framework/duckdb
-            create_info_plist duckdb-simulator.framework/Info.plist
+            mkdir -p duckdb-simulator/Headers
+            cp duckdb-src/src/include/duckdb.h duckdb-simulator/Headers/
+            lipo -create "$SIM_ARM64" "$SIM_X86" -output duckdb-simulator/libduckdb.a
             echo "Simulator fat library created"
           fi
 
           # Create XCFramework combining device and simulator
-          if [ -d "duckdb-simulator.framework" ]; then
+          # xcodebuild -create-xcframework requires .a extension for static libraries
+          if [ -d "duckdb-simulator" ]; then
             xcodebuild -create-xcframework \
-              -library duckdb-device.framework/duckdb -headers duckdb-device.framework/Headers \
-              -library duckdb-simulator.framework/duckdb -headers duckdb-simulator.framework/Headers \
+              -library duckdb-device/libduckdb.a -headers duckdb-device/Headers \
+              -library duckdb-simulator/libduckdb.a -headers duckdb-simulator/Headers \
               -output duckdb.xcframework
             echo "XCFramework created with device and simulator support"
           else
             # Fallback: create XCFramework with device only
             xcodebuild -create-xcframework \
-              -library duckdb-device.framework/duckdb -headers duckdb-device.framework/Headers \
+              -library duckdb-device/libduckdb.a -headers duckdb-device/Headers \
               -output duckdb.xcframework
             echo "XCFramework created with device support only"
           fi
@@ -314,8 +313,8 @@ jobs:
           # This uses the simulator library for development convenience
           mkdir -p duckdb.framework/Headers
           cp duckdb-src/src/include/duckdb.h duckdb.framework/Headers/
-          if [ -d "duckdb-simulator.framework" ]; then
-            cp duckdb-simulator.framework/duckdb duckdb.framework/duckdb
+          if [ -d "duckdb-simulator" ]; then
+            cp duckdb-simulator/libduckdb.a duckdb.framework/duckdb
           else
             cp "$DEVICE_LIB" duckdb.framework/duckdb
           fi
