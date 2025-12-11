@@ -85,32 +85,35 @@ jobs:
 
       - name: Download OpenSSL for iOS
         run: |
-          # Download pre-built OpenSSL XCFramework from krzyzanowskim/OpenSSL
-          # This provides OpenSSL 3.x for iOS (arm64) and iOS Simulator (arm64, x86_64)
-          # Use gh CLI for more reliable download from GitHub releases
-          gh release download 3.6.0001 --repo krzyzanowskim/OpenSSL --pattern "OpenSSL.xcframework.zip"
+          # Download pre-built OpenSSL static libraries from jasonacox/Build-OpenSSL-cURL
+          # This provides OpenSSL 3.x static libs (libssl.a, libcrypto.a) for iOS
+          OPENSSL_PACKAGE="libcurl-8.11.1-openssl-3.0.15-nghttp2-1.64.0"
+          curl -L "https://github.com/jasonacox/Build-OpenSSL-cURL/releases/download/1.0.1/${OPENSSL_PACKAGE}.tgz" | tar xzf -
 
-          # Verify download
-          ls -la OpenSSL.xcframework.zip
-          unzip OpenSSL.xcframework.zip
+          # Create OpenSSL directory structure that CMake expects
+          # For iOS device (arm64)
+          mkdir -p openssl-ios/lib openssl-ios/include
+          cp ${OPENSSL_PACKAGE}/lib/iOS/libssl.a openssl-ios/lib/
+          cp ${OPENSSL_PACKAGE}/lib/iOS/libcrypto.a openssl-ios/lib/
+          cp -r ${OPENSSL_PACKAGE}/include/openssl openssl-ios/include/
 
-          # List the XCFramework structure
-          ls -la OpenSSL.xcframework/
+          # For iOS simulator (arm64 + x86_64)
+          mkdir -p openssl-sim/lib openssl-sim/include
+          cp ${OPENSSL_PACKAGE}/lib/iOS-simulator/libssl.a openssl-sim/lib/
+          cp ${OPENSSL_PACKAGE}/lib/iOS-simulator/libcrypto.a openssl-sim/lib/
+          cp -r ${OPENSSL_PACKAGE}/include/openssl openssl-sim/include/
 
-          # Find the iOS device library path
-          IOS_DEVICE_PATH=$(pwd)/OpenSSL.xcframework/ios-arm64
-          IOS_SIM_PATH=$(pwd)/OpenSSL.xcframework/ios-arm64_x86_64-simulator
-
-          echo "OpenSSL iOS Device path: $IOS_DEVICE_PATH"
-          echo "OpenSSL iOS Simulator path: $IOS_SIM_PATH"
-          ls -la $IOS_DEVICE_PATH/ || true
-          ls -la $IOS_SIM_PATH/ || true
+          # Verify structure
+          echo "=== iOS Device OpenSSL ==="
+          ls -la openssl-ios/lib/
+          ls openssl-ios/include/openssl/ | head -5
+          echo "=== iOS Simulator OpenSSL ==="
+          ls -la openssl-sim/lib/
+          file openssl-sim/lib/libssl.a
 
           # Set environment variables for CMake
-          echo "OPENSSL_ROOT_DIR_IOS=$IOS_DEVICE_PATH" >> $GITHUB_ENV
-          echo "OPENSSL_ROOT_DIR_SIM=$IOS_SIM_PATH" >> $GITHUB_ENV
-        env:
-          GH_TOKEN: ${{ github.token }}
+          echo "OPENSSL_ROOT_DIR_IOS=$(pwd)/openssl-ios" >> $GITHUB_ENV
+          echo "OPENSSL_ROOT_DIR_SIM=$(pwd)/openssl-sim" >> $GITHUB_ENV
 
       - name: Clone DuckDB source
         run: |
