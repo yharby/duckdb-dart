@@ -86,6 +86,10 @@ jobs:
           git clone --depth 1 --branch "v${DUCKDB_VERSION}" "https://github.com/${{ env.DUCKDB_REPO }}.git" duckdb-src
 
       - name: Build iOS Framework (arm64)
+        env:
+          # Set DUCKDB_PLATFORM to avoid cross-compile platform detection issue
+          # The duckdb_platform_binary is built for iOS but needs to run on macOS host
+          DUCKDB_PLATFORM: osx_arm64
         run: |
           cd duckdb-src
           mkdir -p build/ios-arm64
@@ -105,11 +109,14 @@ jobs:
             -DEXTENSION_STATIC_BUILD=ON \
             -DENABLE_EXTENSION_AUTOLOADING=OFF \
             -DENABLE_EXTENSION_AUTOINSTALL=OFF \
-            -DBUILD_EXTENSIONS="${{ env.CORE_EXTENSIONS }}"
+            -DBUILD_EXTENSIONS="${{ env.CORE_EXTENSIONS }}" \
+            -DDUCKDB_EXPLICIT_PLATFORM=osx_arm64
 
           cmake --build . --parallel
 
       - name: Build iOS Simulator Framework (arm64 + x86_64)
+        env:
+          DUCKDB_PLATFORM: osx_arm64
         run: |
           cd duckdb-src
 
@@ -128,7 +135,8 @@ jobs:
             -DEXTENSION_STATIC_BUILD=ON \
             -DENABLE_EXTENSION_AUTOLOADING=OFF \
             -DENABLE_EXTENSION_AUTOINSTALL=OFF \
-            -DBUILD_EXTENSIONS="${{ env.CORE_EXTENSIONS }}"
+            -DBUILD_EXTENSIONS="${{ env.CORE_EXTENSIONS }}" \
+            -DDUCKDB_EXPLICIT_PLATFORM=osx_arm64
           cmake --build . --parallel
           cd ..
 
@@ -147,7 +155,8 @@ jobs:
             -DEXTENSION_STATIC_BUILD=ON \
             -DENABLE_EXTENSION_AUTOLOADING=OFF \
             -DENABLE_EXTENSION_AUTOINSTALL=OFF \
-            -DBUILD_EXTENSIONS="${{ env.CORE_EXTENSIONS }}"
+            -DBUILD_EXTENSIONS="${{ env.CORE_EXTENSIONS }}" \
+            -DDUCKDB_EXPLICIT_PLATFORM=osx_amd64
           cmake --build . --parallel
 
       - name: Create Framework

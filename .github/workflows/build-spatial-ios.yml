@@ -98,6 +98,8 @@ jobs:
           echo "VCPKG_ROOT=$(pwd)/vcpkg" >> $GITHUB_ENV
 
       - name: Build Spatial Extension for iOS (arm64)
+        env:
+          DUCKDB_PLATFORM: osx_arm64
         run: |
           cd duckdb-spatial
           mkdir -p build/ios-arm64
@@ -117,7 +119,8 @@ jobs:
             -DBUILD_UNITTESTS=OFF \
             -DEXTENSION_STATIC_BUILD=ON \
             -DBUILD_EXTENSIONS="icu;json;parquet" \
-            -DSPATIAL_USE_NETWORK=OFF
+            -DSPATIAL_USE_NETWORK=OFF \
+            -DDUCKDB_EXPLICIT_PLATFORM=osx_arm64
 
           cmake --build . --config Release --parallel
 
