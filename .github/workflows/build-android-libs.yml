@@ -36,7 +36,12 @@ jobs:
             VERSION="${{ github.event.inputs.duckdb_version }}"
           else
             # Get latest DuckDB release version
-            VERSION=$(curl -s https://api.github.com/repos/${{ env.DUCKDB_REPO }}/releases/latest | jq -r '.tag_name' | sed 's/^v//')
+            VERSION=$(curl -s https://api.github.com/repos/${{ env.DUCKDB_REPO }}/releases/latest | jq -r '.tag_name // empty' | sed 's/^v//')
+            # Fallback if API fails
+            if [ -z "$VERSION" ] || [ "$VERSION" = "null" ]; then
+              echo "Warning: Could not fetch latest version from GitHub API, using fallback"
+              VERSION="1.4.3"
+            fi
           fi
           echo "version=$VERSION" >> $GITHUB_OUTPUT
           echo "release_tag=v${VERSION}-android" >> $GITHUB_OUTPUT
