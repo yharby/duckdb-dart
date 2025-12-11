@@ -75,6 +75,9 @@ jobs:
         with:
           xcode-version: latest-stable
 
+      - name: Install Ninja
+        run: brew install ninja
+
       - name: Clone DuckDB source
         run: |
           DUCKDB_VERSION="${{ needs.check-version.outputs.duckdb_version }}"
@@ -89,12 +92,14 @@ jobs:
           cd build/ios-arm64
 
           # Build with core extensions statically linked for iOS
+          # Using Ninja generator to avoid Xcode code signing requirements
           # Extensions: icu (unicode), json, parquet (columnar storage)
           cmake ../.. \
-            -G Xcode \
+            -G Ninja \
             -DCMAKE_SYSTEM_NAME=iOS \
             -DCMAKE_OSX_ARCHITECTURES=arm64 \
             -DCMAKE_OSX_DEPLOYMENT_TARGET=12.0 \
+            -DCMAKE_BUILD_TYPE=Release \
             -DBUILD_SHELL=OFF \
             -DBUILD_UNITTESTS=OFF \
             -DEXTENSION_STATIC_BUILD=ON \
@@ -102,28 +107,48 @@ jobs:
             -DENABLE_EXTENSION_AUTOINSTALL=OFF \
             -DBUILD_EXTENSIONS="${{ env.CORE_EXTENSIONS }}"
 
-          cmake --build . --config Release --target duckdb
+          cmake --build . --parallel
 
       - name: Build iOS Simulator Framework (arm64 + x86_64)
         run: |
           cd duckdb-src
-          mkdir -p build/ios-simulator
-          cd build/ios-simulator
 
+          # Build arm64 simulator
+          mkdir -p build/ios-simulator-arm64
+          cd build/ios-simulator-arm64
           cmake ../.. \
-            -G Xcode \
+            -G Ninja \
             -DCMAKE_SYSTEM_NAME=iOS \
             -DCMAKE_OSX_SYSROOT=iphonesimulator \
-            -DCMAKE_OSX_ARCHITECTURES="arm64;x86_64" \
+            -DCMAKE_OSX_ARCHITECTURES=arm64 \
             -DCMAKE_OSX_DEPLOYMENT_TARGET=12.0 \
+            -DCMAKE_BUILD_TYPE=Release \
             -DBUILD_SHELL=OFF \
             -DBUILD_UNITTESTS=OFF \
             -DEXTENSION_STATIC_BUILD=ON \
             -DENABLE_EXTENSION_AUTOLOADING=OFF \
             -DENABLE_EXTENSION_AUTOINSTALL=OFF \
             -DBUILD_EXTENSIONS="${{ env.CORE_EXTENSIONS }}"
+          cmake --build . --parallel
+          cd ..
 
-          cmake --build . --config Release --target duckdb
+          # Build x86_64 simulator
+          mkdir -p ios-simulator-x86_64
+          cd ios-simulator-x86_64
+          cmake ../.. \
+            -G Ninja \
+            -DCMAKE_SYSTEM_NAME=iOS \
+            -DCMAKE_OSX_SYSROOT=iphonesimulator \
+            -DCMAKE_OSX_ARCHITECTURES=x86_64 \
+            -DCMAKE_OSX_DEPLOYMENT_TARGET=12.0 \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DBUILD_SHELL=OFF \
+            -DBUILD_UNITTESTS=OFF \
+            -DEXTENSION_STATIC_BUILD=ON \
+            -DENABLE_EXTENSION_AUTOLOADING=OFF \
+            -DENABLE_EXTENSION_AUTOINSTALL=OFF \
+            -DBUILD_EXTENSIONS="${{ env.CORE_EXTENSIONS }}"
+          cmake --build . --parallel
 
       - name: Create Framework
         run: |
@@ -133,15 +158,25 @@ jobs:
           mkdir -p duckdb.framework/Headers
           cp duckdb-src/src/include/duckdb.h duckdb.framework/Headers/
 
-          # Find and copy the built library
-          DEVICE_LIB=$(find duckdb-src/build/ios-arm64 -name "libduckdb.a" | head -1)
-          if [ -n "$DEVICE_LIB" ]; then
-            cp "$DEVICE_LIB" duckdb.framework/duckdb
-            echo "Copied device library from: $DEVICE_LIB"
-          else
+          # Find device library
+          DEVICE_LIB=$(find duckdb-src/build/ios-arm64 -name "libduckdb.a" -o -name "libduckdb_static.a" | head -1)
+          if [ -z "$DEVICE_LIB" ]; then
             echo "ERROR: Could not find device library"
             find duckdb-src/build/ios-arm64 -name "*.a" 2>/dev/null | head -10
             exit 1
+          fi
+          echo "Found device library: $DEVICE_LIB"
+          cp "$DEVICE_LIB" duckdb.framework/duckdb
+
+          # Find simulator libraries and create fat binary if available
+          SIM_ARM64=$(find duckdb-src/build/ios-simulator-arm64 -name "libduckdb.a" -o -name "libduckdb_static.a" 2>/dev/null | head -1)
+          SIM_X86=$(find duckdb-src/build/ios-simulator-x86_64 -name "libduckdb.a" -o -name "libduckdb_static.a" 2>/dev/null | head -1)
+
+          if [ -n "$SIM_ARM64" ] && [ -n "$SIM_X86" ]; then
+            echo "Creating fat simulator library..."
+            mkdir -p duckdb-simulator.framework
+            lipo -create "$SIM_ARM64" "$SIM_X86" -output duckdb-simulator.framework/duckdb
+            echo "Simulator fat library created"
           fi
 
           # Create Info.plist
@@ -165,7 +200,7 @@ jobs:
             <key>CFBundleVersion</key>
             <string>${DUCKDB_VERSION}</string>
             <key>MinimumOSVersion</key>
-            <string>11.0</string>
+            <string>12.0</string>
           </dict>
           </plist>
           EOF
