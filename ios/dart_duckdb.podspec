@@ -23,11 +23,12 @@ A new flutter plugin project.
   s.ios.vendored_framework = 'Libraries/release/duckdb.framework'
 
   # Use a pre-install hook to check if the library exists
+  # Note: Downloads from yharby/duckdb-dart fork which has the iOS framework properly uploaded
   s.prepare_command = <<-CMD
     mkdir -p Libraries/release  # Ensure the directory exists
     if [ ! -d "Libraries/release/duckdb.framework" ]; then
       echo "Downloading DuckDB library..."
-      curl -L -o duckdb-framework-ios.zip "https://github.com/TigerEyeLabs/duckdb-dart/releases/download/v1.4.4/duckdb-framework-ios.zip"
+      curl -L -o duckdb-framework-ios.zip "https://github.com/yharby/duckdb-dart/releases/download/v1.4.4-ios-fix/duckdb-framework-ios.zip"
       unzip -o duckdb-framework-ios.zip -d Libraries/release/
       rm duckdb-framework-ios.zip
     else
