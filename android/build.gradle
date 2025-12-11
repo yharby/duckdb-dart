@@ -60,7 +60,7 @@ def jniLibsDir = "$projectDir/src/main/jniLibs"
 // GitHub repository for downloading pre-built Android libraries
 // Uses yharby/duckdb-dart fork which has Android binaries properly uploaded
 def githubRepo = "yharby/duckdb-dart"
-def fallbackVersion = "v1.4.4-android"
+def fallbackVersion = "v1.4.3-android"
 
 // ABIs to download - includes x86_64 for emulator support
 def supportedAbis = ['arm64-v8a', 'armeabi-v7a', 'x86_64']
