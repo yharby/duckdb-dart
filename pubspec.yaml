@@ -1,6 +1,6 @@
 name: dart_duckdb
 description: DuckDB for macOS, iOS, Android, Linux, Windows, and Web
-version: 1.4.4
+version: 1.4.5
 homepage: https://github.com/TigerEyeLabs/duckdb-dart
 issue_tracker: https://github.com/TigerEyeLabs/duckdb-dart/issues
 
@@ -13,7 +13,8 @@ dependencies:
   collection: ^1.17.0
   ffi: ^2.0.1
   intl: any
-  js_interop: ^0.0.1
+  # js_interop package removed - conflicts with newer js versions
+  # The code uses dart:js_interop (SDK built-in), not this package
   logging: ^1.0.2
   meta: ^1.8.0
   path: ^1.8.2
