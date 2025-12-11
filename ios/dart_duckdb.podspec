@@ -39,7 +39,7 @@ This plugin provides DuckDB support for Flutter iOS apps.
 
       if [ -z "$RELEASE_URL" ]; then
         echo "Could not find latest iOS release, using fallback..."
-        RELEASE_URL="https://github.com/yharby/duckdb-dart/releases/download/v1.4.4-ios-fix/duckdb-framework-ios.zip"
+        RELEASE_URL="https://github.com/yharby/duckdb-dart/releases/download/v1.4.3-ios/duckdb-framework-ios.zip"
       fi
 
       echo "Downloading from: $RELEASE_URL"

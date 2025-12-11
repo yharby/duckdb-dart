@@ -164,37 +164,25 @@ jobs:
             -DDUCKDB_EXPLICIT_PLATFORM=osx_amd64
           cmake --build . --parallel
 
-      - name: Create Framework
+      - name: Create Frameworks and XCFramework
         run: |
           DUCKDB_VERSION="${{ needs.check-version.outputs.duckdb_version }}"
 
-          # Create framework structure
-          mkdir -p duckdb.framework/Headers
-          cp duckdb-src/src/include/duckdb.h duckdb.framework/Headers/
-
-          # Find device library
+          # Find libraries
           DEVICE_LIB=$(find duckdb-src/build/ios-arm64 -name "libduckdb.a" -o -name "libduckdb_static.a" | head -1)
+          SIM_ARM64=$(find duckdb-src/build/ios-simulator-arm64 -name "libduckdb.a" -o -name "libduckdb_static.a" 2>/dev/null | head -1)
+          SIM_X86=$(find duckdb-src/build/ios-simulator-x86_64 -name "libduckdb.a" -o -name "libduckdb_static.a" 2>/dev/null | head -1)
+
           if [ -z "$DEVICE_LIB" ]; then
             echo "ERROR: Could not find device library"
             find duckdb-src/build/ios-arm64 -name "*.a" 2>/dev/null | head -10
             exit 1
           fi
           echo "Found device library: $DEVICE_LIB"
-          cp "$DEVICE_LIB" duckdb.framework/duckdb
 
-          # Find simulator libraries and create fat binary if available
-          SIM_ARM64=$(find duckdb-src/build/ios-simulator-arm64 -name "libduckdb.a" -o -name "libduckdb_static.a" 2>/dev/null | head -1)
-          SIM_X86=$(find duckdb-src/build/ios-simulator-x86_64 -name "libduckdb.a" -o -name "libduckdb_static.a" 2>/dev/null | head -1)
-
-          if [ -n "$SIM_ARM64" ] && [ -n "$SIM_X86" ]; then
-            echo "Creating fat simulator library..."
-            mkdir -p duckdb-simulator.framework
-            lipo -create "$SIM_ARM64" "$SIM_X86" -output duckdb-simulator.framework/duckdb
-            echo "Simulator fat library created"
-          fi
-
-          # Create Info.plist
-          cat > duckdb.framework/Info.plist << EOF
+          # Create Info.plist template
+          create_info_plist() {
+            cat > "$1" << PLIST
           <?xml version="1.0" encoding="UTF-8"?>
           <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
           <plist version="1.0">
@@ -217,18 +205,66 @@ jobs:
             <string>12.0</string>
           </dict>
           </plist>
-          EOF
+          PLIST
+          }
+
+          # Create device framework
+          mkdir -p duckdb-device.framework/Headers
+          cp duckdb-src/src/include/duckdb.h duckdb-device.framework/Headers/
+          cp "$DEVICE_LIB" duckdb-device.framework/duckdb
+          create_info_plist duckdb-device.framework/Info.plist
+
+          # Create simulator framework with fat binary (arm64 + x86_64)
+          if [ -n "$SIM_ARM64" ] && [ -n "$SIM_X86" ]; then
+            echo "Creating fat simulator library..."
+            mkdir -p duckdb-simulator.framework/Headers
+            cp duckdb-src/src/include/duckdb.h duckdb-simulator.framework/Headers/
+            lipo -create "$SIM_ARM64" "$SIM_X86" -output duckdb-simulator.framework/duckdb
+            create_info_plist duckdb-simulator.framework/Info.plist
+            echo "Simulator fat library created"
+          fi
+
+          # Create XCFramework combining device and simulator
+          if [ -d "duckdb-simulator.framework" ]; then
+            xcodebuild -create-xcframework \
+              -library duckdb-device.framework/duckdb -headers duckdb-device.framework/Headers \
+              -library duckdb-simulator.framework/duckdb -headers duckdb-simulator.framework/Headers \
+              -output duckdb.xcframework
+            echo "XCFramework created with device and simulator support"
+          else
+            # Fallback: create XCFramework with device only
+            xcodebuild -create-xcframework \
+              -library duckdb-device.framework/duckdb -headers duckdb-device.framework/Headers \
+              -output duckdb.xcframework
+            echo "XCFramework created with device support only"
+          fi
+
+          # Also create a simple framework for backwards compatibility
+          # This uses the simulator library for development convenience
+          mkdir -p duckdb.framework/Headers
+          cp duckdb-src/src/include/duckdb.h duckdb.framework/Headers/
+          if [ -d "duckdb-simulator.framework" ]; then
+            cp duckdb-simulator.framework/duckdb duckdb.framework/duckdb
+          else
+            cp "$DEVICE_LIB" duckdb.framework/duckdb
+          fi
+          create_info_plist duckdb.framework/Info.plist
 
       - name: Package Framework
         run: |
+          # Package both XCFramework and regular framework
           zip -r duckdb-framework-ios.zip duckdb.framework
+          zip -r duckdb-xcframework-ios.zip duckdb.xcframework
           echo "Framework size: $(du -h duckdb-framework-ios.zip | cut -f1)"
+          echo "XCFramework size: $(du -h duckdb-xcframework-ios.zip | cut -f1)"
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: duckdb-framework-ios
-          path: duckdb-framework-ios.zip
+          path: |
+            duckdb-framework-ios.zip
+            duckdb-xcframework-ios.zip
 
       - name: Create GitHub Release
         if: github.event.inputs.create_release != 'false'
@@ -238,6 +274,10 @@ jobs:
           name: "DuckDB ${{ needs.check-version.outputs.duckdb_version }} iOS Framework"
           body: |
             Pre-built DuckDB iOS framework for version ${{ needs.check-version.outputs.duckdb_version }}.
+
+            **Downloads:**
+            - `duckdb-framework-ios.zip` - Simple framework with simulator support (for development)
+            - `duckdb-xcframework-ios.zip` - XCFramework with both device and simulator (recommended for production)
 
             **Architectures:** arm64 (device), arm64+x86_64 (simulator)
             **Minimum iOS:** 12.0
@@ -250,6 +290,8 @@ jobs:
             Built automatically from [duckdb/duckdb v${{ needs.check-version.outputs.duckdb_version }}](https://github.com/duckdb/duckdb/releases/tag/v${{ needs.check-version.outputs.duckdb_version }})
 
             **Note:** For geospatial features (spatial, h3), see the separate spatial build workflow.
-          files: duckdb-framework-ios.zip
+          files: |
+            duckdb-framework-ios.zip
+            duckdb-xcframework-ios.zip
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
