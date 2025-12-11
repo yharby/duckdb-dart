@@ -83,10 +83,10 @@ jobs:
       - name: Install Ninja
         run: brew install ninja
 
-      - name: Download OpenSSL for iOS
+      - name: Download OpenSSL and cURL for iOS
         run: |
-          # Download pre-built OpenSSL static libraries from jasonacox/Build-OpenSSL-cURL
-          # This provides OpenSSL 3.x static libs (libssl.a, libcrypto.a) for iOS
+          # Download pre-built OpenSSL and cURL static libraries from jasonacox/Build-OpenSSL-cURL
+          # This provides OpenSSL 3.x and libcurl static libs for iOS (required by httpfs extension)
           OPENSSL_PACKAGE="libcurl-8.11.1-openssl-3.0.15-nghttp2-1.64.0"
           curl -L "https://github.com/jasonacox/Build-OpenSSL-cURL/releases/download/1.0.1/${OPENSSL_PACKAGE}.tgz" | tar xzf -
 
@@ -103,17 +103,30 @@ jobs:
           cp ${OPENSSL_PACKAGE}/lib/iOS-simulator/libcrypto.a openssl-sim/lib/
           cp -r ${OPENSSL_PACKAGE}/include/openssl openssl-sim/include/
 
+          # Create cURL directory structure for iOS device
+          mkdir -p curl-ios/lib curl-ios/include
+          cp ${OPENSSL_PACKAGE}/lib/iOS/libcurl.a curl-ios/lib/
+          cp -r ${OPENSSL_PACKAGE}/include/curl curl-ios/include/
+
+          # Create cURL directory structure for iOS simulator
+          mkdir -p curl-sim/lib curl-sim/include
+          cp ${OPENSSL_PACKAGE}/lib/iOS-simulator/libcurl.a curl-sim/lib/
+          cp -r ${OPENSSL_PACKAGE}/include/curl curl-sim/include/
+
           # Verify structure
-          echo "=== iOS Device OpenSSL ==="
+          echo "=== iOS Device Libraries ==="
           ls -la openssl-ios/lib/
-          ls openssl-ios/include/openssl/ | head -5
-          echo "=== iOS Simulator OpenSSL ==="
+          ls -la curl-ios/lib/
+          echo "=== iOS Simulator Libraries ==="
           ls -la openssl-sim/lib/
-          file openssl-sim/lib/libssl.a
+          ls -la curl-sim/lib/
+          file curl-sim/lib/libcurl.a
 
           # Set environment variables for CMake
           echo "OPENSSL_ROOT_DIR_IOS=$(pwd)/openssl-ios" >> $GITHUB_ENV
           echo "OPENSSL_ROOT_DIR_SIM=$(pwd)/openssl-sim" >> $GITHUB_ENV
+          echo "CURL_ROOT_DIR_IOS=$(pwd)/curl-ios" >> $GITHUB_ENV
+          echo "CURL_ROOT_DIR_SIM=$(pwd)/curl-sim" >> $GITHUB_ENV
 
       - name: Clone DuckDB source
         run: |
@@ -152,7 +165,9 @@ jobs:
             -DOPENSSL_INCLUDE_DIR=$OPENSSL_ROOT_DIR_IOS/include \
             -DOPENSSL_CRYPTO_LIBRARY=$OPENSSL_ROOT_DIR_IOS/lib/libcrypto.a \
             -DOPENSSL_SSL_LIBRARY=$OPENSSL_ROOT_DIR_IOS/lib/libssl.a \
-            -DOPENSSL_USE_STATIC_LIBS=TRUE
+            -DOPENSSL_USE_STATIC_LIBS=TRUE \
+            -DCURL_INCLUDE_DIR=$CURL_ROOT_DIR_IOS/include \
+            -DCURL_LIBRARY=$CURL_ROOT_DIR_IOS/lib/libcurl.a
 
           cmake --build . --parallel
 
@@ -183,7 +198,9 @@ jobs:
             -DOPENSSL_INCLUDE_DIR=$OPENSSL_ROOT_DIR_SIM/include \
             -DOPENSSL_CRYPTO_LIBRARY=$OPENSSL_ROOT_DIR_SIM/lib/libcrypto.a \
             -DOPENSSL_SSL_LIBRARY=$OPENSSL_ROOT_DIR_SIM/lib/libssl.a \
-            -DOPENSSL_USE_STATIC_LIBS=TRUE
+            -DOPENSSL_USE_STATIC_LIBS=TRUE \
+            -DCURL_INCLUDE_DIR=$CURL_ROOT_DIR_SIM/include \
+            -DCURL_LIBRARY=$CURL_ROOT_DIR_SIM/lib/libcurl.a
           cmake --build . --parallel
           cd ..
 
@@ -208,7 +225,9 @@ jobs:
             -DOPENSSL_INCLUDE_DIR=$OPENSSL_ROOT_DIR_SIM/include \
             -DOPENSSL_CRYPTO_LIBRARY=$OPENSSL_ROOT_DIR_SIM/lib/libcrypto.a \
             -DOPENSSL_SSL_LIBRARY=$OPENSSL_ROOT_DIR_SIM/lib/libssl.a \
-            -DOPENSSL_USE_STATIC_LIBS=TRUE
+            -DOPENSSL_USE_STATIC_LIBS=TRUE \
+            -DCURL_INCLUDE_DIR=$CURL_ROOT_DIR_SIM/include \
+            -DCURL_LIBRARY=$CURL_ROOT_DIR_SIM/lib/libcurl.a
           cmake --build . --parallel
 
       - name: Create Frameworks and XCFramework
