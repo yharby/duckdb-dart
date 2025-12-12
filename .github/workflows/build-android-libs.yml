@@ -247,13 +247,17 @@ jobs:
 
           if [ -f "${DEPS_DIR}/lib/libcurl.a" ]; then
             echo "Found cURL libraries"
-            NGHTTP2_LIB=""
-            [ -f "${DEPS_DIR}/lib/libnghttp2.a" ] && NGHTTP2_LIB="${DEPS_DIR}/lib/libnghttp2.a"
-            CURL_OPTS="-DCURL_INCLUDE_DIR=${DEPS_DIR}/include \
-              -DCURL_LIBRARY=\"${DEPS_DIR}/lib/libcurl.a;${NGHTTP2_LIB};-lz\""
+            CURL_OPTS="-DCURL_INCLUDE_DIR=${DEPS_DIR}/include -DCURL_LIBRARY=${DEPS_DIR}/lib/libcurl.a"
+            # Add extra link flags for static curl dependencies
+            if [ -f "${DEPS_DIR}/lib/libnghttp2.a" ]; then
+              EXTRA_CURL_LIBS="-DDUCKDB_EXTRA_LINK_FLAGS=-llog;${DEPS_DIR}/lib/libnghttp2.a;${DEPS_DIR}/lib/libssl.a;${DEPS_DIR}/lib/libcrypto.a;-lz"
+            else
+              EXTRA_CURL_LIBS="-DDUCKDB_EXTRA_LINK_FLAGS=-llog;${DEPS_DIR}/lib/libssl.a;${DEPS_DIR}/lib/libcrypto.a;-lz"
+            fi
           else
             echo "cURL libraries not found, httpfs may not work"
             CURL_OPTS=""
+            EXTRA_CURL_LIBS="-DDUCKDB_EXTRA_LINK_FLAGS=-llog"
           fi
 
           # Build with CMake
@@ -269,13 +273,14 @@ jobs:
             -DBUILD_SHELL=OFF \
             -DEXTENSION_STATIC_BUILD=1 \
             -DBUILD_EXTENSIONS="${{ env.EXTENSIONS }}" \
-            -DSKIP_EXTENSIONS="core_functions" \
+            -DSKIP_EXTENSIONS="${{ env.EXTENSIONS }};core_functions" \
+            -DBUILD_LOADABLE_EXTENSIONS=OFF \
             -DENABLE_EXTENSION_AUTOLOADING=OFF \
             -DENABLE_EXTENSION_AUTOINSTALL=OFF \
-            -DDUCKDB_EXTRA_LINK_FLAGS="-llog" \
             -DDUCKDB_EXPLICIT_PLATFORM=${{ matrix.duckdb_platform }} \
             ${OPENSSL_OPTS} \
             ${CURL_OPTS} \
+            ${EXTRA_CURL_LIBS} \
             ..
 
           cmake --build . --config Release --parallel $(nproc)
