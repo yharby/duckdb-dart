@@ -153,18 +153,22 @@ jobs:
           # Using Ninja generator to avoid Xcode code signing requirements
           # Extensions: icu (unicode), json, parquet (columnar storage), httpfs (HTTP/S3)
           # libcurl depends on nghttp2 and zlib - include them via CURL_LIBRARY
+          # Build dynamic framework for iOS device (arm64)
+          # BUILD_SHARED_LIBS=ON creates libduckdb.dylib that can be loaded via FFI
           cmake ../.. \
             -G Ninja \
             -DCMAKE_SYSTEM_NAME=iOS \
             -DCMAKE_OSX_ARCHITECTURES=arm64 \
             -DCMAKE_OSX_DEPLOYMENT_TARGET=12.0 \
             -DCMAKE_BUILD_TYPE=Release \
+            -DBUILD_SHARED_LIBS=ON \
             -DBUILD_SHELL=OFF \
             -DBUILD_UNITTESTS=OFF \
             -DEXTENSION_STATIC_BUILD=ON \
+            -DBUILD_EXTENSIONS="${{ env.CORE_EXTENSIONS }}" \
+            -DSKIP_EXTENSIONS="${{ env.CORE_EXTENSIONS }};core_functions" \
             -DENABLE_EXTENSION_AUTOLOADING=OFF \
             -DENABLE_EXTENSION_AUTOINSTALL=OFF \
-            -DBUILD_EXTENSIONS="${{ env.CORE_EXTENSIONS }}" \
             -DDUCKDB_EXPLICIT_PLATFORM=osx_arm64 \
             -DOPENSSL_ROOT_DIR=$OPENSSL_ROOT_DIR_IOS \
             -DOPENSSL_INCLUDE_DIR=$OPENSSL_ROOT_DIR_IOS/include \
@@ -185,6 +189,7 @@ jobs:
           # Build arm64 simulator
           mkdir -p build/ios-simulator-arm64
           cd build/ios-simulator-arm64
+          # Build dynamic framework for iOS simulator (arm64)
           cmake ../.. \
             -G Ninja \
             -DCMAKE_SYSTEM_NAME=iOS \
@@ -192,12 +197,14 @@ jobs:
             -DCMAKE_OSX_ARCHITECTURES=arm64 \
             -DCMAKE_OSX_DEPLOYMENT_TARGET=12.0 \
             -DCMAKE_BUILD_TYPE=Release \
+            -DBUILD_SHARED_LIBS=ON \
             -DBUILD_SHELL=OFF \
             -DBUILD_UNITTESTS=OFF \
             -DEXTENSION_STATIC_BUILD=ON \
+            -DBUILD_EXTENSIONS="${{ env.CORE_EXTENSIONS }}" \
+            -DSKIP_EXTENSIONS="${{ env.CORE_EXTENSIONS }};core_functions" \
             -DENABLE_EXTENSION_AUTOLOADING=OFF \
             -DENABLE_EXTENSION_AUTOINSTALL=OFF \
-            -DBUILD_EXTENSIONS="${{ env.CORE_EXTENSIONS }}" \
             -DDUCKDB_EXPLICIT_PLATFORM=osx_arm64 \
             -DOPENSSL_ROOT_DIR=$OPENSSL_ROOT_DIR_SIM \
             -DOPENSSL_INCLUDE_DIR=$OPENSSL_ROOT_DIR_SIM/include \
@@ -209,7 +216,7 @@ jobs:
           cmake --build . --parallel
           cd ..
 
-          # Build x86_64 simulator
+          # Build x86_64 simulator (dynamic framework)
           mkdir -p ios-simulator-x86_64
           cd ios-simulator-x86_64
           cmake ../.. \
@@ -219,12 +226,14 @@ jobs:
             -DCMAKE_OSX_ARCHITECTURES=x86_64 \
             -DCMAKE_OSX_DEPLOYMENT_TARGET=12.0 \
             -DCMAKE_BUILD_TYPE=Release \
+            -DBUILD_SHARED_LIBS=ON \
             -DBUILD_SHELL=OFF \
             -DBUILD_UNITTESTS=OFF \
             -DEXTENSION_STATIC_BUILD=ON \
+            -DBUILD_EXTENSIONS="${{ env.CORE_EXTENSIONS }}" \
+            -DSKIP_EXTENSIONS="${{ env.CORE_EXTENSIONS }};core_functions" \
             -DENABLE_EXTENSION_AUTOLOADING=OFF \
             -DENABLE_EXTENSION_AUTOINSTALL=OFF \
-            -DBUILD_EXTENSIONS="${{ env.CORE_EXTENSIONS }}" \
             -DDUCKDB_EXPLICIT_PLATFORM=osx_amd64 \
             -DOPENSSL_ROOT_DIR=$OPENSSL_ROOT_DIR_SIM \
             -DOPENSSL_INCLUDE_DIR=$OPENSSL_ROOT_DIR_SIM/include \
@@ -239,14 +248,17 @@ jobs:
         run: |
           DUCKDB_VERSION="${{ needs.check-version.outputs.duckdb_version }}"
 
-          # Find libraries
-          DEVICE_LIB=$(find duckdb-src/build/ios-arm64 -name "libduckdb.a" -o -name "libduckdb_static.a" | head -1)
-          SIM_ARM64=$(find duckdb-src/build/ios-simulator-arm64 -name "libduckdb.a" -o -name "libduckdb_static.a" 2>/dev/null | head -1)
-          SIM_X86=$(find duckdb-src/build/ios-simulator-x86_64 -name "libduckdb.a" -o -name "libduckdb_static.a" 2>/dev/null | head -1)
+          # Find dynamic libraries (dylib) - built with BUILD_SHARED_LIBS=ON
+          DEVICE_LIB=$(find duckdb-src/build/ios-arm64 -name "libduckdb.dylib" | head -1)
+          SIM_ARM64=$(find duckdb-src/build/ios-simulator-arm64 -name "libduckdb.dylib" 2>/dev/null | head -1)
+          SIM_X86=$(find duckdb-src/build/ios-simulator-x86_64 -name "libduckdb.dylib" 2>/dev/null | head -1)
 
           if [ -z "$DEVICE_LIB" ]; then
             echo "ERROR: Could not find device library"
-            find duckdb-src/build/ios-arm64 -name "*.a" 2>/dev/null | head -10
+            echo "Looking for dylib..."
+            find duckdb-src/build/ios-arm64 -name "*.dylib" 2>/dev/null | head -10
+            echo "Looking for so..."
+            find duckdb-src/build/ios-arm64 -name "*.so" 2>/dev/null | head -10
             exit 1
           fi
           echo "Found device library: $DEVICE_LIB"
@@ -279,46 +291,51 @@ jobs:
           PLIST
           }
 
-          # Create device library directory with proper .a extension
-          mkdir -p duckdb-device/Headers
-          cp duckdb-src/src/include/duckdb.h duckdb-device/Headers/
-          cp "$DEVICE_LIB" duckdb-device/libduckdb.a
+          # Create device framework directory for dynamic library
+          mkdir -p duckdb-device.framework/Headers
+          cp duckdb-src/src/include/duckdb.h duckdb-device.framework/Headers/
+          cp "$DEVICE_LIB" duckdb-device.framework/duckdb
+          create_info_plist duckdb-device.framework/Info.plist
+          # Set proper install name for dynamic library
+          install_name_tool -id "@rpath/duckdb.framework/duckdb" duckdb-device.framework/duckdb || true
 
-          # Create simulator library with fat binary (arm64 + x86_64)
+          # Create simulator framework with fat binary (arm64 + x86_64)
           if [ -n "$SIM_ARM64" ] && [ -n "$SIM_X86" ]; then
-            echo "Creating fat simulator library..."
-            mkdir -p duckdb-simulator/Headers
-            cp duckdb-src/src/include/duckdb.h duckdb-simulator/Headers/
-            lipo -create "$SIM_ARM64" "$SIM_X86" -output duckdb-simulator/libduckdb.a
-            echo "Simulator fat library created"
+            echo "Creating fat simulator dynamic library..."
+            mkdir -p duckdb-simulator.framework/Headers
+            cp duckdb-src/src/include/duckdb.h duckdb-simulator.framework/Headers/
+            lipo -create "$SIM_ARM64" "$SIM_X86" -output duckdb-simulator.framework/duckdb
+            create_info_plist duckdb-simulator.framework/Info.plist
+            install_name_tool -id "@rpath/duckdb.framework/duckdb" duckdb-simulator.framework/duckdb || true
+            echo "Simulator fat dynamic library created"
           fi
 
-          # Create XCFramework combining device and simulator
-          # xcodebuild -create-xcframework requires .a extension for static libraries
-          if [ -d "duckdb-simulator" ]; then
+          # Create XCFramework combining device and simulator frameworks
+          if [ -d "duckdb-simulator.framework" ]; then
             xcodebuild -create-xcframework \
-              -library duckdb-device/libduckdb.a -headers duckdb-device/Headers \
-              -library duckdb-simulator/libduckdb.a -headers duckdb-simulator/Headers \
+              -framework duckdb-device.framework \
+              -framework duckdb-simulator.framework \
               -output duckdb.xcframework
             echo "XCFramework created with device and simulator support"
           else
             # Fallback: create XCFramework with device only
             xcodebuild -create-xcframework \
-              -library duckdb-device/libduckdb.a -headers duckdb-device/Headers \
+              -framework duckdb-device.framework \
               -output duckdb.xcframework
             echo "XCFramework created with device support only"
           fi
 
           # Also create a simple framework for backwards compatibility
-          # This uses the simulator library for development convenience
+          # This uses the simulator framework for development convenience
           mkdir -p duckdb.framework/Headers
           cp duckdb-src/src/include/duckdb.h duckdb.framework/Headers/
-          if [ -d "duckdb-simulator" ]; then
-            cp duckdb-simulator/libduckdb.a duckdb.framework/duckdb
+          if [ -d "duckdb-simulator.framework" ]; then
+            cp duckdb-simulator.framework/duckdb duckdb.framework/duckdb
           else
-            cp "$DEVICE_LIB" duckdb.framework/duckdb
+            cp duckdb-device.framework/duckdb duckdb.framework/duckdb
           fi
           create_info_plist duckdb.framework/Info.plist
+          install_name_tool -id "@rpath/duckdb.framework/duckdb" duckdb.framework/duckdb || true
 
       - name: Package Framework
         run: |
