@@ -228,7 +228,7 @@ jobs:
             -DBUILD_UNITTESTS=OFF \
             -DEXTENSION_STATIC_BUILD=ON \
             -DBUILD_EXTENSIONS="${{ env.EXTENSIONS }}" \
-            -DSKIP_EXTENSIONS="${{ env.EXTENSIONS }};core_functions" \
+            -DSKIP_EXTENSIONS="core_functions" \
             -DENABLE_EXTENSION_AUTOLOADING=OFF \
             -DENABLE_EXTENSION_AUTOINSTALL=OFF \
             -DDUCKDB_EXPLICIT_PLATFORM=osx_${{ matrix.arch == 'arm64' && 'arm64' || 'amd64' }} \
