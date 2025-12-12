@@ -1,62 +1,75 @@
+#
+# Unified Modern Workflow: Build DuckDB with httpfs for iOS
+#
+# Features:
+# - Dynamic DuckDB version detection
+# - Uses pre-built OpenSSL/cURL from jasonacox/Build-OpenSSL-cURL or yharby/openssl_for_ios_and_android
+# - XCFramework output with device + simulator support
+# - Statically linked extensions (icu, json, parquet, httpfs)
+#
+
 name: Build iOS Framework
 
 on:
   workflow_dispatch:
     inputs:
       duckdb_version:
-        description: 'DuckDB version to build (leave empty for latest)'
+        description: 'DuckDB version (leave empty for latest)'
         required: false
         default: ''
+      openssl_source:
+        description: 'OpenSSL source: jasonacox (recommended) or yharby'
+        required: false
+        default: 'jasonacox'
       create_release:
         description: 'Create a GitHub release'
         type: boolean
         default: true
-      build_spatial:
-        description: 'Build with spatial extension (experimental)'
-        type: boolean
-        default: false
   schedule:
     # Check for new DuckDB releases weekly (Sundays at midnight)
     - cron: '0 0 * * 0'
 
 env:
   DUCKDB_REPO: duckdb/duckdb
-  # Core extensions to include (built-in to DuckDB source)
-  CORE_EXTENSIONS: "icu;json;parquet;httpfs"
+  # Extensions to statically link
+  EXTENSIONS: "icu;json;parquet;httpfs"
+  # Minimum iOS version
+  IOS_MIN_VERSION: "12.0"
 
 jobs:
-  check-version:
+  # ============================================================
+  # Job 1: Check versions and prepare build
+  # ============================================================
+  prepare:
+    name: Prepare Build
     runs-on: ubuntu-latest
     outputs:
-      duckdb_version: ${{ steps.get_version.outputs.version }}
-      should_build: ${{ steps.check_existing.outputs.should_build }}
-      release_tag: ${{ steps.get_version.outputs.release_tag }}
+      duckdb_version: ${{ steps.versions.outputs.duckdb }}
+      should_build: ${{ steps.check.outputs.should_build }}
+      release_tag: ${{ steps.versions.outputs.release_tag }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Get DuckDB version
-        id: get_version
+      - name: Detect DuckDB Version
+        id: versions
         run: |
           if [ -n "${{ github.event.inputs.duckdb_version }}" ]; then
-            VERSION="${{ github.event.inputs.duckdb_version }}"
+            DUCKDB_VERSION="${{ github.event.inputs.duckdb_version }}"
           else
-            # Get latest DuckDB release version
-            VERSION=$(curl -s https://api.github.com/repos/${{ env.DUCKDB_REPO }}/releases/latest | jq -r '.tag_name // empty' | sed 's/^v//')
-            # Fallback if API fails
-            if [ -z "$VERSION" ] || [ "$VERSION" = "null" ]; then
-              echo "Warning: Could not fetch latest version from GitHub API, using fallback"
-              VERSION="1.4.3"
-            fi
+            DUCKDB_VERSION=$(curl -s https://api.github.com/repos/${{ env.DUCKDB_REPO }}/releases/latest | \
+              jq -r '.tag_name // empty' | sed 's/^v//')
+            [ -z "$DUCKDB_VERSION" ] || [ "$DUCKDB_VERSION" = "null" ] && DUCKDB_VERSION="1.4.3"
           fi
-          echo "version=$VERSION" >> $GITHUB_OUTPUT
-          echo "release_tag=v${VERSION}-ios" >> $GITHUB_OUTPUT
-          echo "DuckDB version: $VERSION"
+          echo "duckdb=$DUCKDB_VERSION" >> $GITHUB_OUTPUT
+          echo "release_tag=v${DUCKDB_VERSION}-ios" >> $GITHUB_OUTPUT
+          echo "DuckDB version: $DUCKDB_VERSION"
 
-      - name: Check if release already exists
-        id: check_existing
+      - name: Check if Release Exists
+        id: check
         run: |
-          RELEASE_TAG="v${{ steps.get_version.outputs.version }}-ios"
+          RELEASE_TAG="v${{ steps.versions.outputs.duckdb }}-ios"
+
           if gh release view "$RELEASE_TAG" --repo ${{ github.repository }} &>/dev/null; then
             echo "Release $RELEASE_TAG already exists"
             echo "should_build=false" >> $GITHUB_OUTPUT
@@ -67,205 +80,200 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-  build-ios:
-    needs: check-version
-    if: needs.check-version.outputs.should_build == 'true'
-    runs-on: macos-latest
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+  # ============================================================
+  # Job 2: Build DuckDB for iOS
+  # ============================================================
+  build:
+    name: Build iOS (${{ matrix.target }})
+    needs: prepare
+    if: needs.prepare.outputs.should_build == 'true'
+    runs-on: macos-14
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: ios-arm64
+            platform: iphoneos
+            arch: arm64
+            sdk: iphoneos
+            cmake_system: iOS
+            sysroot_flag: ""
+          - target: ios-simulator-arm64
+            platform: iphonesimulator
+            arch: arm64
+            sdk: iphonesimulator
+            cmake_system: iOS
+            sysroot_flag: "-DCMAKE_OSX_SYSROOT=iphonesimulator"
+          - target: ios-simulator-x86_64
+            platform: iphonesimulator
+            arch: x86_64
+            sdk: iphonesimulator
+            cmake_system: iOS
+            sysroot_flag: "-DCMAKE_OSX_SYSROOT=iphonesimulator"
 
-      - name: Set up Xcode
+    steps:
+      - name: Setup Xcode
         uses: maxim-lobanov/setup-xcode@v1
         with:
           xcode-version: latest-stable
 
-      - name: Install Ninja
+      - name: Install Build Tools
         run: brew install ninja
 
-      - name: Download OpenSSL and cURL for iOS
+      - name: Download OpenSSL and cURL
         run: |
-          # Download pre-built OpenSSL and cURL static libraries from jasonacox/Build-OpenSSL-cURL
-          # This provides OpenSSL 3.x and libcurl static libs for iOS (required by httpfs extension)
-          OPENSSL_PACKAGE="libcurl-8.11.1-openssl-3.0.15-nghttp2-1.64.0"
-          curl -L "https://github.com/jasonacox/Build-OpenSSL-cURL/releases/download/1.0.1/${OPENSSL_PACKAGE}.tgz" | tar xzf -
+          OPENSSL_SOURCE="${{ github.event.inputs.openssl_source || 'jasonacox' }}"
 
-          # Create OpenSSL directory structure that CMake expects
-          # For iOS device (arm64)
-          mkdir -p openssl-ios/lib openssl-ios/include
-          cp ${OPENSSL_PACKAGE}/lib/iOS/libssl.a openssl-ios/lib/
-          cp ${OPENSSL_PACKAGE}/lib/iOS/libcrypto.a openssl-ios/lib/
-          cp -r ${OPENSSL_PACKAGE}/include/openssl openssl-ios/include/
+          if [ "$OPENSSL_SOURCE" = "jasonacox" ]; then
+            echo "Downloading from jasonacox/Build-OpenSSL-cURL"
+            # Use jasonacox's pre-built libraries (most reliable for iOS)
+            PACKAGE="libcurl-8.11.1-openssl-3.0.15-nghttp2-1.64.0"
+            curl -L "https://github.com/jasonacox/Build-OpenSSL-cURL/releases/download/1.0.1/${PACKAGE}.tgz" | tar xzf -
 
-          # For iOS simulator (arm64 + x86_64)
-          mkdir -p openssl-sim/lib openssl-sim/include
-          cp ${OPENSSL_PACKAGE}/lib/iOS-simulator/libssl.a openssl-sim/lib/
-          cp ${OPENSSL_PACKAGE}/lib/iOS-simulator/libcrypto.a openssl-sim/lib/
-          cp -r ${OPENSSL_PACKAGE}/include/openssl openssl-sim/include/
+            # Setup directories based on target
+            if [ "${{ matrix.platform }}" = "iphoneos" ]; then
+              PLATFORM_DIR="iOS"
+            else
+              PLATFORM_DIR="iOS-simulator"
+            fi
 
-          # Create cURL directory structure for iOS device (includes nghttp2 dependency)
-          mkdir -p curl-ios/lib curl-ios/include
-          cp ${OPENSSL_PACKAGE}/lib/iOS/libcurl.a curl-ios/lib/
-          cp ${OPENSSL_PACKAGE}/lib/iOS/libnghttp2.a curl-ios/lib/
-          cp -r ${OPENSSL_PACKAGE}/include/curl curl-ios/include/
+            mkdir -p deps/{openssl,curl}/{lib,include}
 
-          # Create cURL directory structure for iOS simulator (includes nghttp2 dependency)
-          mkdir -p curl-sim/lib curl-sim/include
-          cp ${OPENSSL_PACKAGE}/lib/iOS-simulator/libcurl.a curl-sim/lib/
-          cp ${OPENSSL_PACKAGE}/lib/iOS-simulator/libnghttp2.a curl-sim/lib/
-          cp -r ${OPENSSL_PACKAGE}/include/curl curl-sim/include/
+            # Copy OpenSSL
+            cp ${PACKAGE}/lib/${PLATFORM_DIR}/libssl.a deps/openssl/lib/
+            cp ${PACKAGE}/lib/${PLATFORM_DIR}/libcrypto.a deps/openssl/lib/
+            cp -r ${PACKAGE}/include/openssl deps/openssl/include/
 
-          # Verify structure
-          echo "=== iOS Device Libraries ==="
-          ls -la openssl-ios/lib/
-          ls -la curl-ios/lib/
-          echo "=== iOS Simulator Libraries ==="
-          ls -la openssl-sim/lib/
-          ls -la curl-sim/lib/
-          file curl-sim/lib/libcurl.a
+            # Copy cURL and nghttp2
+            cp ${PACKAGE}/lib/${PLATFORM_DIR}/libcurl.a deps/curl/lib/
+            cp ${PACKAGE}/lib/${PLATFORM_DIR}/libnghttp2.a deps/curl/lib/
+            cp -r ${PACKAGE}/include/curl deps/curl/include/
+          else
+            echo "Downloading from yharby/openssl_for_ios_and_android"
+            # Get latest iOS release
+            RELEASE_TAG=$(curl -s https://api.github.com/repos/yharby/openssl_for_ios_and_android/releases | \
+              jq -r '[.[] | select(.tag_name | startswith("ios-"))] | .[0].tag_name // empty')
 
-          # Set environment variables for CMake
-          echo "OPENSSL_ROOT_DIR_IOS=$(pwd)/openssl-ios" >> $GITHUB_ENV
-          echo "OPENSSL_ROOT_DIR_SIM=$(pwd)/openssl-sim" >> $GITHUB_ENV
-          echo "CURL_ROOT_DIR_IOS=$(pwd)/curl-ios" >> $GITHUB_ENV
-          echo "CURL_ROOT_DIR_SIM=$(pwd)/curl-sim" >> $GITHUB_ENV
-          echo "NGHTTP2_LIB_IOS=$(pwd)/curl-ios/lib/libnghttp2.a" >> $GITHUB_ENV
-          echo "NGHTTP2_LIB_SIM=$(pwd)/curl-sim/lib/libnghttp2.a" >> $GITHUB_ENV
+            if [ -z "$RELEASE_TAG" ]; then
+              echo "No iOS release found, falling back to jasonacox"
+              # Fallback to jasonacox
+              PACKAGE="libcurl-8.11.1-openssl-3.0.15-nghttp2-1.64.0"
+              curl -L "https://github.com/jasonacox/Build-OpenSSL-cURL/releases/download/1.0.1/${PACKAGE}.tgz" | tar xzf -
 
-      - name: Clone DuckDB source
+              if [ "${{ matrix.platform }}" = "iphoneos" ]; then
+                PLATFORM_DIR="iOS"
+              else
+                PLATFORM_DIR="iOS-simulator"
+              fi
+
+              mkdir -p deps/{openssl,curl}/{lib,include}
+              cp ${PACKAGE}/lib/${PLATFORM_DIR}/libssl.a deps/openssl/lib/
+              cp ${PACKAGE}/lib/${PLATFORM_DIR}/libcrypto.a deps/openssl/lib/
+              cp -r ${PACKAGE}/include/openssl deps/openssl/include/
+              cp ${PACKAGE}/lib/${PLATFORM_DIR}/libcurl.a deps/curl/lib/
+              cp ${PACKAGE}/lib/${PLATFORM_DIR}/libnghttp2.a deps/curl/lib/
+              cp -r ${PACKAGE}/include/curl deps/curl/include/
+            else
+              BASE_URL="https://github.com/yharby/openssl_for_ios_and_android/releases/download/${RELEASE_TAG}"
+              mkdir -p deps/{openssl,curl}/{lib,include}
+
+              # Download XCFrameworks or individual libs
+              if [ "${{ matrix.platform }}" = "iphoneos" ]; then
+                SUFFIX="ios-arm64"
+              else
+                SUFFIX="ios-simulator"
+              fi
+
+              # Try to download
+              curl -fLo deps/openssl.zip "${BASE_URL}/openssl_*-${SUFFIX}.zip" 2>/dev/null || true
+              curl -fLo deps/curl.zip "${BASE_URL}/curl_*-${SUFFIX}.zip" 2>/dev/null || true
+            fi
+          fi
+
+          echo "=== OpenSSL libraries ==="
+          ls -la deps/openssl/lib/
+          echo "=== cURL libraries ==="
+          ls -la deps/curl/lib/
+
+      - name: Download DuckDB Source
         run: |
-          DUCKDB_VERSION="${{ needs.check-version.outputs.duckdb_version }}"
-          echo "Building DuckDB version: $DUCKDB_VERSION"
-          # Use git clone instead of zip download to properly handle symbolic links
-          git clone --depth 1 --branch "v${DUCKDB_VERSION}" "https://github.com/${{ env.DUCKDB_REPO }}.git" duckdb-src
+          DUCKDB_VERSION="${{ needs.prepare.outputs.duckdb_version }}"
+          echo "Downloading DuckDB v${DUCKDB_VERSION}"
 
-      - name: Build iOS Framework (arm64)
-        env:
-          # Set DUCKDB_PLATFORM to avoid cross-compile platform detection issue
-          # The duckdb_platform_binary is built for iOS but needs to run on macOS host
-          DUCKDB_PLATFORM: osx_arm64
-        run: |
-          cd duckdb-src
-          mkdir -p build/ios-arm64
-          cd build/ios-arm64
+          # Use git clone to handle symlinks properly
+          git clone --depth 1 --branch "v${DUCKDB_VERSION}" \
+            "https://github.com/${{ env.DUCKDB_REPO }}.git" duckdb-src
 
-          # Build with core extensions statically linked for iOS
-          # Using Ninja generator to avoid Xcode code signing requirements
-          # Extensions: icu (unicode), json, parquet (columnar storage), httpfs (HTTP/S3)
-          # libcurl depends on nghttp2 and zlib - include them via CURL_LIBRARY
-          # Build dynamic framework for iOS device (arm64)
-          # BUILD_SHARED_LIBS=ON creates libduckdb.dylib that can be loaded via FFI
-          cmake ../.. \
-            -G Ninja \
-            -DCMAKE_SYSTEM_NAME=iOS \
-            -DCMAKE_OSX_ARCHITECTURES=arm64 \
-            -DCMAKE_OSX_DEPLOYMENT_TARGET=12.0 \
-            -DCMAKE_BUILD_TYPE=Release \
-            -DBUILD_SHARED_LIBS=ON \
-            -DBUILD_SHELL=OFF \
-            -DBUILD_UNITTESTS=OFF \
-            -DEXTENSION_STATIC_BUILD=ON \
-            -DBUILD_EXTENSIONS="${{ env.CORE_EXTENSIONS }}" \
-            -DSKIP_EXTENSIONS="${{ env.CORE_EXTENSIONS }};core_functions" \
-            -DENABLE_EXTENSION_AUTOLOADING=OFF \
-            -DENABLE_EXTENSION_AUTOINSTALL=OFF \
-            -DDUCKDB_EXPLICIT_PLATFORM=osx_arm64 \
-            -DOPENSSL_ROOT_DIR=$OPENSSL_ROOT_DIR_IOS \
-            -DOPENSSL_INCLUDE_DIR=$OPENSSL_ROOT_DIR_IOS/include \
-            -DOPENSSL_CRYPTO_LIBRARY=$OPENSSL_ROOT_DIR_IOS/lib/libcrypto.a \
-            -DOPENSSL_SSL_LIBRARY=$OPENSSL_ROOT_DIR_IOS/lib/libssl.a \
-            -DOPENSSL_USE_STATIC_LIBS=TRUE \
-            -DCURL_INCLUDE_DIR=$CURL_ROOT_DIR_IOS/include \
-            -DCURL_LIBRARY="$CURL_ROOT_DIR_IOS/lib/libcurl.a;$NGHTTP2_LIB_IOS;-lz"
-
-          cmake --build . --parallel
-
-      - name: Build iOS Simulator Framework (arm64 + x86_64)
+      - name: Build DuckDB
         env:
           DUCKDB_PLATFORM: osx_arm64
         run: |
           cd duckdb-src
+          mkdir -p build/${{ matrix.target }}
+          cd build/${{ matrix.target }}
 
-          # Build arm64 simulator
-          mkdir -p build/ios-simulator-arm64
-          cd build/ios-simulator-arm64
-          # Build dynamic framework for iOS simulator (arm64)
+          OPENSSL_DIR="${GITHUB_WORKSPACE}/deps/openssl"
+          CURL_DIR="${GITHUB_WORKSPACE}/deps/curl"
+
+          # Build dynamic library for iOS
           cmake ../.. \
             -G Ninja \
-            -DCMAKE_SYSTEM_NAME=iOS \
-            -DCMAKE_OSX_SYSROOT=iphonesimulator \
-            -DCMAKE_OSX_ARCHITECTURES=arm64 \
-            -DCMAKE_OSX_DEPLOYMENT_TARGET=12.0 \
+            -DCMAKE_SYSTEM_NAME=${{ matrix.cmake_system }} \
+            -DCMAKE_OSX_ARCHITECTURES=${{ matrix.arch }} \
+            -DCMAKE_OSX_DEPLOYMENT_TARGET=${{ env.IOS_MIN_VERSION }} \
+            ${{ matrix.sysroot_flag }} \
             -DCMAKE_BUILD_TYPE=Release \
             -DBUILD_SHARED_LIBS=ON \
             -DBUILD_SHELL=OFF \
             -DBUILD_UNITTESTS=OFF \
             -DEXTENSION_STATIC_BUILD=ON \
-            -DBUILD_EXTENSIONS="${{ env.CORE_EXTENSIONS }}" \
-            -DSKIP_EXTENSIONS="${{ env.CORE_EXTENSIONS }};core_functions" \
+            -DBUILD_EXTENSIONS="${{ env.EXTENSIONS }}" \
+            -DSKIP_EXTENSIONS="${{ env.EXTENSIONS }};core_functions" \
             -DENABLE_EXTENSION_AUTOLOADING=OFF \
             -DENABLE_EXTENSION_AUTOINSTALL=OFF \
-            -DDUCKDB_EXPLICIT_PLATFORM=osx_arm64 \
-            -DOPENSSL_ROOT_DIR=$OPENSSL_ROOT_DIR_SIM \
-            -DOPENSSL_INCLUDE_DIR=$OPENSSL_ROOT_DIR_SIM/include \
-            -DOPENSSL_CRYPTO_LIBRARY=$OPENSSL_ROOT_DIR_SIM/lib/libcrypto.a \
-            -DOPENSSL_SSL_LIBRARY=$OPENSSL_ROOT_DIR_SIM/lib/libssl.a \
+            -DDUCKDB_EXPLICIT_PLATFORM=osx_${{ matrix.arch == 'arm64' && 'arm64' || 'amd64' }} \
+            -DOPENSSL_ROOT_DIR=${OPENSSL_DIR} \
+            -DOPENSSL_INCLUDE_DIR=${OPENSSL_DIR}/include \
+            -DOPENSSL_CRYPTO_LIBRARY=${OPENSSL_DIR}/lib/libcrypto.a \
+            -DOPENSSL_SSL_LIBRARY=${OPENSSL_DIR}/lib/libssl.a \
             -DOPENSSL_USE_STATIC_LIBS=TRUE \
-            -DCURL_INCLUDE_DIR=$CURL_ROOT_DIR_SIM/include \
-            -DCURL_LIBRARY="$CURL_ROOT_DIR_SIM/lib/libcurl.a;$NGHTTP2_LIB_SIM;-lz"
-          cmake --build . --parallel
-          cd ..
+            -DCURL_INCLUDE_DIR=${CURL_DIR}/include \
+            -DCURL_LIBRARY="${CURL_DIR}/lib/libcurl.a;${CURL_DIR}/lib/libnghttp2.a;-lz"
 
-          # Build x86_64 simulator (dynamic framework)
-          mkdir -p ios-simulator-x86_64
-          cd ios-simulator-x86_64
-          cmake ../.. \
-            -G Ninja \
-            -DCMAKE_SYSTEM_NAME=iOS \
-            -DCMAKE_OSX_SYSROOT=iphonesimulator \
-            -DCMAKE_OSX_ARCHITECTURES=x86_64 \
-            -DCMAKE_OSX_DEPLOYMENT_TARGET=12.0 \
-            -DCMAKE_BUILD_TYPE=Release \
-            -DBUILD_SHARED_LIBS=ON \
-            -DBUILD_SHELL=OFF \
-            -DBUILD_UNITTESTS=OFF \
-            -DEXTENSION_STATIC_BUILD=ON \
-            -DBUILD_EXTENSIONS="${{ env.CORE_EXTENSIONS }}" \
-            -DSKIP_EXTENSIONS="${{ env.CORE_EXTENSIONS }};core_functions" \
-            -DENABLE_EXTENSION_AUTOLOADING=OFF \
-            -DENABLE_EXTENSION_AUTOINSTALL=OFF \
-            -DDUCKDB_EXPLICIT_PLATFORM=osx_amd64 \
-            -DOPENSSL_ROOT_DIR=$OPENSSL_ROOT_DIR_SIM \
-            -DOPENSSL_INCLUDE_DIR=$OPENSSL_ROOT_DIR_SIM/include \
-            -DOPENSSL_CRYPTO_LIBRARY=$OPENSSL_ROOT_DIR_SIM/lib/libcrypto.a \
-            -DOPENSSL_SSL_LIBRARY=$OPENSSL_ROOT_DIR_SIM/lib/libssl.a \
-            -DOPENSSL_USE_STATIC_LIBS=TRUE \
-            -DCURL_INCLUDE_DIR=$CURL_ROOT_DIR_SIM/include \
-            -DCURL_LIBRARY="$CURL_ROOT_DIR_SIM/lib/libcurl.a;$NGHTTP2_LIB_SIM;-lz"
-          cmake --build . --parallel
+          cmake --build . --parallel $(sysctl -n hw.ncpu)
 
-      - name: Create Frameworks and XCFramework
+      - name: Verify Build
         run: |
-          DUCKDB_VERSION="${{ needs.check-version.outputs.duckdb_version }}"
+          echo "=== Verifying DuckDB build for ${{ matrix.target }} ==="
+          find duckdb-src/build/${{ matrix.target }} -name "libduckdb.dylib" -o -name "libduckdb.so" 2>/dev/null | head -5
+          DYLIB=$(find duckdb-src/build/${{ matrix.target }} -name "libduckdb.dylib" | head -1)
+          if [ -n "$DYLIB" ]; then
+            ls -la "$DYLIB"
+            file "$DYLIB"
+          fi
 
-          # Find dynamic libraries (dylib) - built with BUILD_SHARED_LIBS=ON
-          DEVICE_LIB=$(find duckdb-src/build/ios-arm64 -name "libduckdb.dylib" | head -1)
-          SIM_ARM64=$(find duckdb-src/build/ios-simulator-arm64 -name "libduckdb.dylib" 2>/dev/null | head -1)
-          SIM_X86=$(find duckdb-src/build/ios-simulator-x86_64 -name "libduckdb.dylib" 2>/dev/null | head -1)
+      - name: Create Framework
+        run: |
+          DUCKDB_VERSION="${{ needs.prepare.outputs.duckdb_version }}"
+          DYLIB=$(find duckdb-src/build/${{ matrix.target }} -name "libduckdb.dylib" | head -1)
 
-          if [ -z "$DEVICE_LIB" ]; then
-            echo "ERROR: Could not find device library"
-            echo "Looking for dylib..."
-            find duckdb-src/build/ios-arm64 -name "*.dylib" 2>/dev/null | head -10
-            echo "Looking for so..."
-            find duckdb-src/build/ios-arm64 -name "*.so" 2>/dev/null | head -10
+          if [ -z "$DYLIB" ]; then
+            echo "ERROR: libduckdb.dylib not found"
+            find duckdb-src/build/${{ matrix.target }} -type f -name "*.dylib" -o -name "*.so"
             exit 1
           fi
-          echo "Found device library: $DEVICE_LIB"
 
-          # Create Info.plist template
-          create_info_plist() {
-            cat > "$1" << PLIST
+          # Create framework structure
+          mkdir -p output/${{ matrix.target }}/duckdb.framework/Headers
+
+          # Copy library and rename to framework binary name
+          cp "$DYLIB" output/${{ matrix.target }}/duckdb.framework/duckdb
+
+          # Copy header
+          cp duckdb-src/src/include/duckdb.h output/${{ matrix.target }}/duckdb.framework/Headers/
+
+          # Create Info.plist
+          cat > output/${{ matrix.target }}/duckdb.framework/Info.plist << EOF
           <?xml version="1.0" encoding="UTF-8"?>
           <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
           <plist version="1.0">
@@ -285,100 +293,131 @@ jobs:
             <key>CFBundleVersion</key>
             <string>${DUCKDB_VERSION}</string>
             <key>MinimumOSVersion</key>
-            <string>12.0</string>
+            <string>${{ env.IOS_MIN_VERSION }}</string>
           </dict>
           </plist>
-          PLIST
-          }
+          EOF
 
-          # Create device framework directory for dynamic library
-          mkdir -p duckdb-device.framework/Headers
-          cp duckdb-src/src/include/duckdb.h duckdb-device.framework/Headers/
-          cp "$DEVICE_LIB" duckdb-device.framework/duckdb
-          create_info_plist duckdb-device.framework/Info.plist
-          # Set proper install name for dynamic library
-          install_name_tool -id "@rpath/duckdb.framework/duckdb" duckdb-device.framework/duckdb || true
+          # Set install name
+          install_name_tool -id "@rpath/duckdb.framework/duckdb" \
+            output/${{ matrix.target }}/duckdb.framework/duckdb || true
 
-          # Create simulator framework with fat binary (arm64 + x86_64)
-          if [ -n "$SIM_ARM64" ] && [ -n "$SIM_X86" ]; then
-            echo "Creating fat simulator dynamic library..."
-            mkdir -p duckdb-simulator.framework/Headers
-            cp duckdb-src/src/include/duckdb.h duckdb-simulator.framework/Headers/
-            lipo -create "$SIM_ARM64" "$SIM_X86" -output duckdb-simulator.framework/duckdb
-            create_info_plist duckdb-simulator.framework/Info.plist
-            install_name_tool -id "@rpath/duckdb.framework/duckdb" duckdb-simulator.framework/duckdb || true
-            echo "Simulator fat dynamic library created"
-          fi
+          echo "=== Framework created ==="
+          ls -la output/${{ matrix.target }}/duckdb.framework/
 
-          # Create XCFramework combining device and simulator frameworks
-          if [ -d "duckdb-simulator.framework" ]; then
-            xcodebuild -create-xcframework \
-              -framework duckdb-device.framework \
-              -framework duckdb-simulator.framework \
-              -output duckdb.xcframework
-            echo "XCFramework created with device and simulator support"
-          else
-            # Fallback: create XCFramework with device only
-            xcodebuild -create-xcframework \
-              -framework duckdb-device.framework \
-              -output duckdb.xcframework
-            echo "XCFramework created with device support only"
-          fi
-
-          # Also create a simple framework for backwards compatibility
-          # This uses the simulator framework for development convenience
-          mkdir -p duckdb.framework/Headers
-          cp duckdb-src/src/include/duckdb.h duckdb.framework/Headers/
-          if [ -d "duckdb-simulator.framework" ]; then
-            cp duckdb-simulator.framework/duckdb duckdb.framework/duckdb
-          else
-            cp duckdb-device.framework/duckdb duckdb.framework/duckdb
-          fi
-          create_info_plist duckdb.framework/Info.plist
-          install_name_tool -id "@rpath/duckdb.framework/duckdb" duckdb.framework/duckdb || true
-
-      - name: Package Framework
-        run: |
-          # Package both XCFramework and regular framework
-          zip -r duckdb-framework-ios.zip duckdb.framework
-          zip -r duckdb-xcframework-ios.zip duckdb.xcframework
-          echo "Framework size: $(du -h duckdb-framework-ios.zip | cut -f1)"
-          echo "XCFramework size: $(du -h duckdb-xcframework-ios.zip | cut -f1)"
-
-      - name: Upload artifact
+      - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: duckdb-framework-ios
-          path: |
-            duckdb-framework-ios.zip
-            duckdb-xcframework-ios.zip
+          name: duckdb-${{ matrix.target }}
+          path: output/${{ matrix.target }}/duckdb.framework
+          retention-days: 1
+
+  # ============================================================
+  # Job 3: Create XCFramework and Release
+  # ============================================================
+  release:
+    name: Create XCFramework & Release
+    needs: [prepare, build]
+    if: needs.prepare.outputs.should_build == 'true' && github.event.inputs.create_release != 'false'
+    runs-on: macos-14
+    steps:
+      - name: Download All Artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: duckdb-*
+          path: artifacts
+
+      - name: Create Fat Simulator Framework
+        run: |
+          echo "=== Downloaded artifacts ==="
+          find artifacts -type f -name "duckdb" | head -10
+
+          # Create fat binary for simulator (arm64 + x86_64)
+          mkdir -p fat-simulator/duckdb.framework/Headers
+
+          lipo -create \
+            artifacts/duckdb-ios-simulator-arm64/duckdb.framework/duckdb \
+            artifacts/duckdb-ios-simulator-x86_64/duckdb.framework/duckdb \
+            -output fat-simulator/duckdb.framework/duckdb
+
+          # Copy headers and plist from one of the simulator builds
+          cp artifacts/duckdb-ios-simulator-arm64/duckdb.framework/Headers/* fat-simulator/duckdb.framework/Headers/
+          cp artifacts/duckdb-ios-simulator-arm64/duckdb.framework/Info.plist fat-simulator/duckdb.framework/
+
+          # Set install name
+          install_name_tool -id "@rpath/duckdb.framework/duckdb" fat-simulator/duckdb.framework/duckdb || true
+
+          echo "=== Fat simulator framework ==="
+          file fat-simulator/duckdb.framework/duckdb
+          lipo -info fat-simulator/duckdb.framework/duckdb
+
+      - name: Create XCFramework
+        run: |
+          # Create XCFramework combining device and simulator
+          xcodebuild -create-xcframework \
+            -framework artifacts/duckdb-ios-arm64/duckdb.framework \
+            -framework fat-simulator/duckdb.framework \
+            -output duckdb.xcframework
+
+          echo "=== XCFramework created ==="
+          ls -la duckdb.xcframework/
+
+      - name: Package Release Assets
+        run: |
+          mkdir -p release
+
+          # Package XCFramework
+          zip -r release/duckdb-xcframework-ios.zip duckdb.xcframework
+
+          # Package regular framework (simulator for dev convenience)
+          cd fat-simulator
+          zip -r ../release/duckdb-framework-ios.zip duckdb.framework
+          cd ..
+
+          # Package device-only framework
+          cd artifacts/duckdb-ios-arm64
+          zip -r ../../release/duckdb-framework-ios-device.zip duckdb.framework
+          cd ../..
+
+          echo "=== Release assets ==="
+          ls -la release/
 
       - name: Create GitHub Release
-        if: github.event.inputs.create_release != 'false'
-        uses: softprops/action-gh-release@v1
+        uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ needs.check-version.outputs.release_tag }}
-          name: "DuckDB ${{ needs.check-version.outputs.duckdb_version }} iOS Framework"
+          tag_name: ${{ needs.prepare.outputs.release_tag }}
+          name: "DuckDB ${{ needs.prepare.outputs.duckdb_version }} iOS Framework"
           body: |
-            Pre-built DuckDB iOS framework for version ${{ needs.check-version.outputs.duckdb_version }}.
+            Pre-built DuckDB iOS framework for version ${{ needs.prepare.outputs.duckdb_version }}.
 
-            **Downloads:**
-            - `duckdb-framework-ios.zip` - Simple framework with simulator support (for development)
-            - `duckdb-xcframework-ios.zip` - XCFramework with both device and simulator (recommended for production)
+            ## Downloads
+            - `duckdb-xcframework-ios.zip` - **Recommended** XCFramework with device and simulator
+            - `duckdb-framework-ios.zip` - Framework with simulator support (for development)
+            - `duckdb-framework-ios-device.zip` - Device-only framework (arm64)
 
-            **Architectures:** arm64 (device), arm64+x86_64 (simulator)
-            **Minimum iOS:** 12.0
-            **Extensions (statically linked):**
+            ## Build Configuration
+            - **Architectures**: arm64 (device), arm64 + x86_64 (simulator)
+            - **Minimum iOS**: ${{ env.IOS_MIN_VERSION }}
+
+            ## Extensions (statically linked)
             - `icu` - Unicode/collation support
             - `json` - JSON parsing and querying
             - `parquet` - Parquet file format support
             - `httpfs` - HTTP/HTTPS and S3 file system support
 
-            Built automatically from [duckdb/duckdb v${{ needs.check-version.outputs.duckdb_version }}](https://github.com/duckdb/duckdb/releases/tag/v${{ needs.check-version.outputs.duckdb_version }})
+            ## Dependencies
+            Built with [jasonacox/Build-OpenSSL-cURL](https://github.com/jasonacox/Build-OpenSSL-cURL) libraries:
+            - OpenSSL 3.0.15
+            - cURL 8.11.1
+            - nghttp2 1.64.0
 
-            **Note:** For geospatial features (spatial, h3), see the separate spatial build workflow.
-          files: |
-            duckdb-framework-ios.zip
-            duckdb-xcframework-ios.zip
+            Built automatically from [duckdb/duckdb v${{ needs.prepare.outputs.duckdb_version }}](https://github.com/duckdb/duckdb/releases/tag/v${{ needs.prepare.outputs.duckdb_version }})
+          files: release/*.zip
+          fail_on_unmatched_files: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Cleanup Artifacts
+        uses: geekyeggo/delete-artifact@v5
+        with:
+          name: duckdb-*

@@ -1,10 +1,24 @@
+#
+# Unified Modern Workflow: Build DuckDB with httpfs for Android
+#
+# Features:
+# - Dynamic DuckDB version detection
+# - Uses pre-built OpenSSL/cURL from openssl_for_ios_and_android releases
+# - Matrix builds for all ABIs
+# - Statically linked extensions (icu, json, parquet, httpfs)
+#
+
 name: Build Android Libraries
 
 on:
   workflow_dispatch:
     inputs:
       duckdb_version:
-        description: 'DuckDB version to build (leave empty for latest)'
+        description: 'DuckDB version (leave empty for latest)'
+        required: false
+        default: ''
+      openssl_release_tag:
+        description: 'OpenSSL release tag from yharby/openssl_for_ios_and_android (leave empty for latest)'
         required: false
         default: ''
       create_release:
@@ -17,40 +31,62 @@ on:
 
 env:
   DUCKDB_REPO: duckdb/duckdb
+  OPENSSL_REPO: yharby/openssl_for_ios_and_android
+  # Extensions to statically link
+  EXTENSIONS: "icu;json;parquet;httpfs"
 
 jobs:
-  check-version:
+  # ============================================================
+  # Job 1: Check versions and prepare build
+  # ============================================================
+  prepare:
+    name: Prepare Build
     runs-on: ubuntu-latest
     outputs:
-      duckdb_version: ${{ steps.get_version.outputs.version }}
-      should_build: ${{ steps.check_existing.outputs.should_build }}
-      release_tag: ${{ steps.get_version.outputs.release_tag }}
+      duckdb_version: ${{ steps.versions.outputs.duckdb }}
+      openssl_tag: ${{ steps.versions.outputs.openssl_tag }}
+      should_build: ${{ steps.check.outputs.should_build }}
+      release_tag: ${{ steps.versions.outputs.release_tag }}
+      matrix: ${{ steps.matrix.outputs.matrix }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Get DuckDB version
-        id: get_version
+      - name: Detect Versions
+        id: versions
         run: |
+          # DuckDB version
           if [ -n "${{ github.event.inputs.duckdb_version }}" ]; then
-            VERSION="${{ github.event.inputs.duckdb_version }}"
+            DUCKDB_VERSION="${{ github.event.inputs.duckdb_version }}"
           else
-            # Get latest DuckDB release version
-            VERSION=$(curl -s https://api.github.com/repos/${{ env.DUCKDB_REPO }}/releases/latest | jq -r '.tag_name // empty' | sed 's/^v//')
-            # Fallback if API fails
-            if [ -z "$VERSION" ] || [ "$VERSION" = "null" ]; then
-              echo "Warning: Could not fetch latest version from GitHub API, using fallback"
-              VERSION="1.4.3"
-            fi
+            DUCKDB_VERSION=$(curl -s https://api.github.com/repos/${{ env.DUCKDB_REPO }}/releases/latest | \
+              jq -r '.tag_name // empty' | sed 's/^v//')
+            [ -z "$DUCKDB_VERSION" ] || [ "$DUCKDB_VERSION" = "null" ] && DUCKDB_VERSION="1.4.3"
           fi
-          echo "version=$VERSION" >> $GITHUB_OUTPUT
-          echo "release_tag=v${VERSION}-android" >> $GITHUB_OUTPUT
-          echo "DuckDB version: $VERSION"
+          echo "duckdb=$DUCKDB_VERSION" >> $GITHUB_OUTPUT
+          echo "DuckDB version: $DUCKDB_VERSION"
 
-      - name: Check if release already exists
-        id: check_existing
+          # OpenSSL release tag
+          if [ -n "${{ github.event.inputs.openssl_release_tag }}" ]; then
+            OPENSSL_TAG="${{ github.event.inputs.openssl_release_tag }}"
+          else
+            # Get latest Android release from openssl_for_ios_and_android
+            OPENSSL_TAG=$(curl -s https://api.github.com/repos/${{ env.OPENSSL_REPO }}/releases | \
+              jq -r '[.[] | select(.tag_name | startswith("android-"))] | .[0].tag_name // empty')
+            [ -z "$OPENSSL_TAG" ] || [ "$OPENSSL_TAG" = "null" ] && OPENSSL_TAG="android-openssl3.0.15-curl8.11.1"
+          fi
+          echo "openssl_tag=$OPENSSL_TAG" >> $GITHUB_OUTPUT
+          echo "OpenSSL release tag: $OPENSSL_TAG"
+
+          # Release tag for this build
+          RELEASE_TAG="v${DUCKDB_VERSION}-android"
+          echo "release_tag=$RELEASE_TAG" >> $GITHUB_OUTPUT
+
+      - name: Check if Release Exists
+        id: check
         run: |
-          RELEASE_TAG="v${{ steps.get_version.outputs.version }}-android"
+          RELEASE_TAG="${{ steps.versions.outputs.release_tag }}"
+
           if gh release view "$RELEASE_TAG" --repo ${{ github.repository }} &>/dev/null; then
             echo "Release $RELEASE_TAG already exists"
             echo "should_build=false" >> $GITHUB_OUTPUT
@@ -61,20 +97,41 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-  build-android:
-    needs: check-version
-    if: needs.check-version.outputs.should_build == 'true'
+      - name: Generate Build Matrix
+        id: matrix
+        run: |
+          MATRIX=$(cat << 'EOF'
+          {
+            "include": [
+              {
+                "abi": "arm64-v8a",
+                "duckdb_platform": "linux_arm64"
+              },
+              {
+                "abi": "armeabi-v7a",
+                "duckdb_platform": "linux_arm64"
+              },
+              {
+                "abi": "x86_64",
+                "duckdb_platform": "linux_amd64"
+              }
+            ]
+          }
+          EOF
+          )
+          echo "matrix=$(echo $MATRIX | jq -c .)" >> $GITHUB_OUTPUT
+
+  # ============================================================
+  # Job 2: Build DuckDB for each ABI
+  # ============================================================
+  build:
+    name: Build (${{ matrix.abi }})
+    needs: prepare
+    if: needs.prepare.outputs.should_build == 'true'
     runs-on: ubuntu-latest
     strategy:
-      matrix:
-        abi: [arm64-v8a, armeabi-v7a, x86_64]
-        include:
-          - abi: arm64-v8a
-            duckdb_platform: linux_arm64
-          - abi: armeabi-v7a
-            duckdb_platform: linux_arm64
-          - abi: x86_64
-            duckdb_platform: linux_amd64
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.prepare.outputs.matrix) }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -83,77 +140,125 @@ jobs:
         uses: nttld/setup-ndk@v1
         id: setup-ndk
         with:
-          ndk-version: r26b
+          ndk-version: r27c
+          add-to-path: true
 
-      - name: Install Ninja
+      - name: Install Build Tools
         run: sudo apt-get install -y ninja-build
 
-      - name: Download OpenSSL, cURL, and nghttp2 for Android
+      - name: Download OpenSSL/cURL Libraries
         run: |
-          # Download pre-built libraries from yharby/openssl_for_ios_and_android
-          # Built with correct API levels to avoid stdin/stderr symbol issues
-          RELEASE_TAG="ci-release-69311a04"
-          BASE_URL="https://github.com/yharby/openssl_for_ios_and_android/releases/download/${RELEASE_TAG}"
+          OPENSSL_TAG="${{ needs.prepare.outputs.openssl_tag }}"
+          ABI="${{ matrix.abi }}"
 
-          # Download OpenSSL 1.1.1w
-          curl -L -o openssl.zip "${BASE_URL}/openssl_1.1.1w-android-${{ matrix.abi }}.zip"
-          unzip -o openssl.zip -d openssl-tmp
-          mkdir -p openssl/${{ matrix.abi }}
-          mv openssl-tmp/* openssl/${{ matrix.abi }}/
+          echo "Downloading combined library package for $ABI from release $OPENSSL_TAG"
 
-          # Download cURL 7.68.0
-          curl -L -o curl.zip "${BASE_URL}/curl_7.68.0-android-${{ matrix.abi }}.zip"
-          unzip -o curl.zip -d curl-tmp
-          mkdir -p curl/${{ matrix.abi }}
-          mv curl-tmp/* curl/${{ matrix.abi }}/
+          # Try combined package first
+          COMBINED_URL="https://github.com/${{ env.OPENSSL_REPO }}/releases/download/${OPENSSL_TAG}/openssl-curl-nghttp2-android-${ABI}.zip"
 
-          # Download nghttp2 1.40.0
-          curl -L -o nghttp2.zip "${BASE_URL}/nghttp2_1.40.0-android-${{ matrix.abi }}.zip"
-          unzip -o nghttp2.zip -d nghttp2-tmp
-          mkdir -p nghttp2/${{ matrix.abi }}
-          mv nghttp2-tmp/* nghttp2/${{ matrix.abi }}/
+          mkdir -p deps/${ABI}
 
-          # Verify structure
-          echo "=== OpenSSL for ${{ matrix.abi }} ==="
-          ls -la openssl/${{ matrix.abi }}/lib/ || ls -la openssl/${{ matrix.abi }}/
-          echo "=== cURL for ${{ matrix.abi }} ==="
-          ls -la curl/${{ matrix.abi }}/lib/ || ls -la curl/${{ matrix.abi }}/
-          echo "=== nghttp2 for ${{ matrix.abi }} ==="
-          ls -la nghttp2/${{ matrix.abi }}/lib/ || ls -la nghttp2/${{ matrix.abi }}/
+          if curl -fLo deps/combined.zip "$COMBINED_URL" 2>/dev/null; then
+            echo "Downloaded combined package"
+            unzip -o deps/combined.zip -d deps/${ABI}
+          else
+            echo "Combined package not found, trying individual packages..."
 
-      - name: Download DuckDB source
+            # Download individual packages
+            BASE_URL="https://github.com/${{ env.OPENSSL_REPO }}/releases/download/${OPENSSL_TAG}"
+
+            # Find and download OpenSSL
+            OPENSSL_FILE=$(curl -s "https://api.github.com/repos/${{ env.OPENSSL_REPO }}/releases/tags/${OPENSSL_TAG}" | \
+              jq -r ".assets[] | select(.name | contains(\"openssl\") and contains(\"${ABI}\")) | .name" | head -1)
+
+            if [ -n "$OPENSSL_FILE" ]; then
+              curl -fLo deps/openssl.zip "${BASE_URL}/${OPENSSL_FILE}"
+              unzip -o deps/openssl.zip -d deps/${ABI}/openssl_tmp
+              # Normalize directory structure
+              if [ -d "deps/${ABI}/openssl_tmp/lib" ]; then
+                mv deps/${ABI}/openssl_tmp/* deps/${ABI}/
+              else
+                mkdir -p deps/${ABI}/lib deps/${ABI}/include
+                find deps/${ABI}/openssl_tmp -name "*.a" -exec cp {} deps/${ABI}/lib/ \;
+                find deps/${ABI}/openssl_tmp -name "*.h" -exec cp {} deps/${ABI}/include/ \; 2>/dev/null || true
+              fi
+              rm -rf deps/${ABI}/openssl_tmp
+            fi
+
+            # Download nghttp2
+            NGHTTP2_FILE=$(curl -s "https://api.github.com/repos/${{ env.OPENSSL_REPO }}/releases/tags/${OPENSSL_TAG}" | \
+              jq -r ".assets[] | select(.name | contains(\"nghttp2\") and contains(\"${ABI}\")) | .name" | head -1)
+
+            if [ -n "$NGHTTP2_FILE" ]; then
+              curl -fLo deps/nghttp2.zip "${BASE_URL}/${NGHTTP2_FILE}"
+              unzip -o deps/nghttp2.zip -d deps/${ABI}/nghttp2_tmp
+              find deps/${ABI}/nghttp2_tmp -name "*.a" -exec cp {} deps/${ABI}/lib/ \;
+              rm -rf deps/${ABI}/nghttp2_tmp
+            fi
+
+            # Download cURL
+            CURL_FILE=$(curl -s "https://api.github.com/repos/${{ env.OPENSSL_REPO }}/releases/tags/${OPENSSL_TAG}" | \
+              jq -r ".assets[] | select(.name | contains(\"curl\") and contains(\"${ABI}\")) | .name" | head -1)
+
+            if [ -n "$CURL_FILE" ]; then
+              curl -fLo deps/curl.zip "${BASE_URL}/${CURL_FILE}"
+              unzip -o deps/curl.zip -d deps/${ABI}/curl_tmp
+              find deps/${ABI}/curl_tmp -name "*.a" -exec cp {} deps/${ABI}/lib/ \;
+              find deps/${ABI}/curl_tmp -type d -name "curl" -exec cp -r {} deps/${ABI}/include/ \; 2>/dev/null || true
+              rm -rf deps/${ABI}/curl_tmp
+            fi
+          fi
+
+          echo "=== Downloaded libraries ==="
+          ls -la deps/${ABI}/lib/ 2>/dev/null || ls -la deps/${ABI}/
+
+      - name: Download DuckDB Source
         run: |
-          DUCKDB_VERSION="${{ needs.check-version.outputs.duckdb_version }}"
-          echo "Building DuckDB version: $DUCKDB_VERSION for ${{ matrix.abi }}"
-          curl -L -o duckdb.zip "https://github.com/${{ env.DUCKDB_REPO }}/archive/refs/tags/v${DUCKDB_VERSION}.zip"
-          unzip duckdb.zip
+          DUCKDB_VERSION="${{ needs.prepare.outputs.duckdb_version }}"
+          echo "Downloading DuckDB v${DUCKDB_VERSION}"
+
+          curl -LO "https://github.com/${{ env.DUCKDB_REPO }}/archive/refs/tags/v${DUCKDB_VERSION}.zip"
+          unzip v${DUCKDB_VERSION}.zip
           mv duckdb-${DUCKDB_VERSION} duckdb-src
 
-      - name: Build Android library
+      - name: Build DuckDB with Extensions
         env:
           ANDROID_NDK_HOME: ${{ steps.setup-ndk.outputs.ndk-path }}
-          # Set DUCKDB_PLATFORM to avoid cross-compile platform detection issue
-          # The duckdb_platform_binary is built for Android but runs on host
           DUCKDB_PLATFORM: ${{ matrix.duckdb_platform }}
         run: |
           cd duckdb-src
           mkdir -p build
           cd build
 
-          # Set library paths for the current ABI
-          OPENSSL_ROOT=$(pwd)/../../openssl/${{ matrix.abi }}
-          CURL_ROOT=$(pwd)/../../curl/${{ matrix.abi }}
-          NGHTTP2_ROOT=$(pwd)/../../nghttp2/${{ matrix.abi }}
+          DEPS_DIR="${GITHUB_WORKSPACE}/deps/${{ matrix.abi }}"
 
-          # Build with extensions statically linked into libduckdb.so
-          # Following official DuckDB Android build docs:
-          # https://duckdb.org/docs/stable/dev/building/android
-          #
-          # EXTENSION_STATIC_BUILD=1: Links extensions into the main libduckdb.so binary
-          # SKIP_EXTENSIONS: Prevents building loadable .duckdb_extension files (which fail to link on Android)
-          # Both flags together ensure extensions are statically linked but no loadable extension files are built
+          # Check if libraries exist
+          if [ -f "${DEPS_DIR}/lib/libssl.a" ]; then
+            echo "Found OpenSSL libraries"
+            OPENSSL_OPTS="-DOPENSSL_ROOT_DIR=${DEPS_DIR} \
+              -DOPENSSL_INCLUDE_DIR=${DEPS_DIR}/include \
+              -DOPENSSL_CRYPTO_LIBRARY=${DEPS_DIR}/lib/libcrypto.a \
+              -DOPENSSL_SSL_LIBRARY=${DEPS_DIR}/lib/libssl.a \
+              -DOPENSSL_USE_STATIC_LIBS=TRUE"
+          else
+            echo "OpenSSL libraries not found, httpfs may not work"
+            OPENSSL_OPTS=""
+          fi
+
+          if [ -f "${DEPS_DIR}/lib/libcurl.a" ]; then
+            echo "Found cURL libraries"
+            NGHTTP2_LIB=""
+            [ -f "${DEPS_DIR}/lib/libnghttp2.a" ] && NGHTTP2_LIB="${DEPS_DIR}/lib/libnghttp2.a"
+            CURL_OPTS="-DCURL_INCLUDE_DIR=${DEPS_DIR}/include \
+              -DCURL_LIBRARY=\"${DEPS_DIR}/lib/libcurl.a;${NGHTTP2_LIB};-lz\""
+          else
+            echo "cURL libraries not found, httpfs may not work"
+            CURL_OPTS=""
+          fi
+
+          # Build with CMake
           cmake -G Ninja \
-            -DCMAKE_TOOLCHAIN_FILE=$ANDROID_NDK_HOME/build/cmake/android.toolchain.cmake \
+            -DCMAKE_TOOLCHAIN_FILE=${ANDROID_NDK_HOME}/build/cmake/android.toolchain.cmake \
             -DANDROID_ABI=${{ matrix.abi }} \
             -DANDROID_PLATFORM=android-21 \
             -DANDROID_STL=c++_static \
@@ -163,79 +268,96 @@ jobs:
             -DBUILD_UNITTESTS=OFF \
             -DBUILD_SHELL=OFF \
             -DEXTENSION_STATIC_BUILD=1 \
-            -DBUILD_EXTENSIONS="icu;parquet;json;httpfs" \
-            -DSKIP_EXTENSIONS="icu;parquet;json;httpfs;core_functions" \
+            -DBUILD_EXTENSIONS="${{ env.EXTENSIONS }}" \
+            -DSKIP_EXTENSIONS="${{ env.EXTENSIONS }};core_functions" \
             -DENABLE_EXTENSION_AUTOLOADING=OFF \
             -DENABLE_EXTENSION_AUTOINSTALL=OFF \
             -DDUCKDB_EXTRA_LINK_FLAGS="-llog" \
             -DDUCKDB_EXPLICIT_PLATFORM=${{ matrix.duckdb_platform }} \
-            -DOPENSSL_ROOT_DIR=$OPENSSL_ROOT \
-            -DOPENSSL_INCLUDE_DIR=$OPENSSL_ROOT/include \
-            -DOPENSSL_CRYPTO_LIBRARY=$OPENSSL_ROOT/lib/libcrypto.a \
-            -DOPENSSL_SSL_LIBRARY=$OPENSSL_ROOT/lib/libssl.a \
-            -DOPENSSL_USE_STATIC_LIBS=TRUE \
-            -DCURL_INCLUDE_DIR=$CURL_ROOT/include \
-            -DCURL_LIBRARY="$CURL_ROOT/lib/libcurl.a;$NGHTTP2_ROOT/lib/libnghttp2.a;-lz" \
+            ${OPENSSL_OPTS} \
+            ${CURL_OPTS} \
             ..
 
-          cmake --build . --config Release --parallel
+          cmake --build . --config Release --parallel $(nproc)
 
-          # Strip debug symbols to reduce size
-          $ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-strip --strip-debug src/libduckdb.so
+          # Strip debug symbols
+          ${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-strip --strip-debug src/libduckdb.so
 
-      - name: Package library
+      - name: Verify Build
+        run: |
+          echo "=== Verifying DuckDB build for ${{ matrix.abi }} ==="
+          ls -la duckdb-src/build/src/
+          file duckdb-src/build/src/libduckdb.so
+          echo "Library size: $(du -h duckdb-src/build/src/libduckdb.so | cut -f1)"
+
+      - name: Package Library
         run: |
           mkdir -p output
           cp duckdb-src/build/src/libduckdb.so output/
           cd output
           zip libduckdb-android_${{ matrix.abi }}.zip libduckdb.so
-          echo "Library size: $(du -h libduckdb-android_${{ matrix.abi }}.zip | cut -f1)"
 
-      - name: Upload artifact
+      - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
           name: libduckdb-android_${{ matrix.abi }}
           path: output/libduckdb-android_${{ matrix.abi }}.zip
+          retention-days: 1
 
-  create-release:
-    needs: [check-version, build-android]
-    if: github.event.inputs.create_release != 'false'
+  # ============================================================
+  # Job 3: Create Release
+  # ============================================================
+  release:
+    name: Create Release
+    needs: [prepare, build]
+    if: needs.prepare.outputs.should_build == 'true' && github.event.inputs.create_release != 'false'
     runs-on: ubuntu-latest
     steps:
-      - name: Download all artifacts
+      - name: Download All Artifacts
         uses: actions/download-artifact@v4
         with:
           path: artifacts
 
-      - name: List artifacts
-        run: find artifacts -type f -name "*.zip"
+      - name: Prepare Release
+        run: |
+          mkdir -p release
+          find artifacts -name "*.zip" -exec cp {} release/ \;
+          echo "=== Release artifacts ==="
+          ls -la release/
 
       - name: Create GitHub Release
-        uses: softprops/action-gh-release@v1
+        uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ needs.check-version.outputs.release_tag }}
-          name: "DuckDB ${{ needs.check-version.outputs.duckdb_version }} Android Libraries"
+          tag_name: ${{ needs.prepare.outputs.release_tag }}
+          name: "DuckDB ${{ needs.prepare.outputs.duckdb_version }} Android Libraries"
           body: |
-            Pre-built DuckDB Android libraries for version ${{ needs.check-version.outputs.duckdb_version }}.
+            Pre-built DuckDB Android libraries for version ${{ needs.prepare.outputs.duckdb_version }}.
 
-            **Architectures:**
-            - arm64-v8a (64-bit ARM devices)
-            - armeabi-v7a (32-bit ARM devices)
-            - x86_64 (x86 emulator)
+            ## Architectures
+            - `arm64-v8a` - 64-bit ARM devices
+            - `armeabi-v7a` - 32-bit ARM devices
+            - `x86_64` - x86 emulator
 
-            **Minimum Android SDK:** 21
-            **Extensions (statically linked):**
+            ## Build Configuration
+            - **Minimum Android SDK**: 21
+            - **NDK Version**: r27c
+
+            ## Extensions (statically linked)
             - `icu` - Unicode/collation support
             - `json` - JSON parsing and querying
             - `parquet` - Parquet file format support
             - `httpfs` - HTTP/HTTPS and S3 file system support
 
-            Built automatically from [duckdb/duckdb v${{ needs.check-version.outputs.duckdb_version }}](https://github.com/duckdb/duckdb/releases/tag/v${{ needs.check-version.outputs.duckdb_version }})
+            ## Dependencies
+            Built with libraries from [${{ env.OPENSSL_REPO }}](https://github.com/${{ env.OPENSSL_REPO }}/releases/tag/${{ needs.prepare.outputs.openssl_tag }})
 
-            **Note:** For geospatial features (spatial), see the separate spatial build workflow.
-          files: |
-            artifacts/libduckdb-android_arm64-v8a/libduckdb-android_arm64-v8a.zip
-            artifacts/libduckdb-android_armeabi-v7a/libduckdb-android_armeabi-v7a.zip
-            artifacts/libduckdb-android_x86_64/libduckdb-android_x86_64.zip
+            Built automatically from [duckdb/duckdb v${{ needs.prepare.outputs.duckdb_version }}](https://github.com/duckdb/duckdb/releases/tag/v${{ needs.prepare.outputs.duckdb_version }})
+          files: release/*.zip
+          fail_on_unmatched_files: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Cleanup Artifacts
+        uses: geekyeggo/delete-artifact@v5
+        with:
+          name: libduckdb-android_*
