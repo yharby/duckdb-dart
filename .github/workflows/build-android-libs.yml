@@ -145,9 +145,9 @@ jobs:
           CURL_ROOT=$(pwd)/../../curl/${{ matrix.abi }}
           NGHTTP2_ROOT=$(pwd)/../../nghttp2/${{ matrix.abi }}
 
-          # Build with icu, parquet, json, httpfs extensions statically linked into libduckdb.so
-          # SKIP_EXTENSIONS prevents building loadable .duckdb_extension files (which fail to link)
-          # Extensions are still linked into libduckdb.so via BUILD_EXTENSIONS
+          # Build with extensions statically linked into libduckdb.so
+          # Following official DuckDB Android build docs:
+          # https://duckdb.org/docs/stable/dev/building/android
           cmake -G Ninja \
             -DCMAKE_TOOLCHAIN_FILE=$ANDROID_NDK_HOME/build/cmake/android.toolchain.cmake \
             -DANDROID_ABI=${{ matrix.abi }} \
@@ -158,8 +158,8 @@ jobs:
             -DBUILD_SHARED_LIBS=ON \
             -DBUILD_UNITTESTS=OFF \
             -DBUILD_SHELL=OFF \
+            -DEXTENSION_STATIC_BUILD=1 \
             -DBUILD_EXTENSIONS="icu;parquet;json;httpfs" \
-            -DSKIP_EXTENSIONS="icu;parquet;json;httpfs;core_functions" \
             -DENABLE_EXTENSION_AUTOLOADING=OFF \
             -DENABLE_EXTENSION_AUTOINSTALL=OFF \
             -DDUCKDB_EXTRA_LINK_FLAGS="-llog" \
