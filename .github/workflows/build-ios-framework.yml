@@ -327,22 +327,36 @@ jobs:
           pattern: duckdb-*
           path: artifacts
 
-      - name: Create Fat Simulator Framework
+      - name: Prepare Framework Structure
         run: |
           echo "=== Downloaded artifacts ==="
-          find artifacts -type f -name "duckdb" | head -10
+          find artifacts -type f | head -20
 
+          # Artifacts are downloaded flat, need to restructure into .framework bundles
+          for target in ios-arm64 ios-simulator-arm64 ios-simulator-x86_64; do
+            echo "Restructuring $target..."
+            mkdir -p "frameworks/${target}/duckdb.framework/Headers"
+            cp "artifacts/duckdb-${target}/duckdb" "frameworks/${target}/duckdb.framework/duckdb"
+            cp "artifacts/duckdb-${target}/Headers/"* "frameworks/${target}/duckdb.framework/Headers/" 2>/dev/null || true
+            cp "artifacts/duckdb-${target}/Info.plist" "frameworks/${target}/duckdb.framework/" 2>/dev/null || true
+          done
+
+          echo "=== Restructured frameworks ==="
+          find frameworks -type f | head -20
+
+      - name: Create Fat Simulator Framework
+        run: |
           # Create fat binary for simulator (arm64 + x86_64)
           mkdir -p fat-simulator/duckdb.framework/Headers
 
           lipo -create \
-            artifacts/duckdb-ios-simulator-arm64/duckdb.framework/duckdb \
-            artifacts/duckdb-ios-simulator-x86_64/duckdb.framework/duckdb \
+            frameworks/ios-simulator-arm64/duckdb.framework/duckdb \
+            frameworks/ios-simulator-x86_64/duckdb.framework/duckdb \
             -output fat-simulator/duckdb.framework/duckdb
 
           # Copy headers and plist from one of the simulator builds
-          cp artifacts/duckdb-ios-simulator-arm64/duckdb.framework/Headers/* fat-simulator/duckdb.framework/Headers/
-          cp artifacts/duckdb-ios-simulator-arm64/duckdb.framework/Info.plist fat-simulator/duckdb.framework/
+          cp frameworks/ios-simulator-arm64/duckdb.framework/Headers/* fat-simulator/duckdb.framework/Headers/
+          cp frameworks/ios-simulator-arm64/duckdb.framework/Info.plist fat-simulator/duckdb.framework/
 
           # Set install name
           install_name_tool -id "@rpath/duckdb.framework/duckdb" fat-simulator/duckdb.framework/duckdb || true
@@ -355,7 +369,7 @@ jobs:
         run: |
           # Create XCFramework combining device and simulator
           xcodebuild -create-xcframework \
-            -framework artifacts/duckdb-ios-arm64/duckdb.framework \
+            -framework frameworks/ios-arm64/duckdb.framework \
             -framework fat-simulator/duckdb.framework \
             -output duckdb.xcframework
 
@@ -375,7 +389,7 @@ jobs:
           cd ..
 
           # Package device-only framework
-          cd artifacts/duckdb-ios-arm64
+          cd frameworks/ios-arm64
           zip -r ../../release/duckdb-framework-ios-device.zip duckdb.framework
           cd ../..
 
