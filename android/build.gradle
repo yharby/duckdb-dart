@@ -67,23 +67,10 @@ def supportedAbis = ['arm64-v8a', 'armeabi-v7a', 'x86_64']
 
 task downloadAndExtractDuckDB {
     doLast {
-        // Try to get latest Android release from GitHub API, fallback to known version
+        // Use pinned version for reproducible builds
+        // Update this when upgrading DuckDB version
         def releaseTag = fallbackVersion
-        try {
-            def apiUrl = "https://api.github.com/repos/${githubRepo}/releases"
-            def connection = new URL(apiUrl).openConnection()
-            connection.setRequestProperty("Accept", "application/vnd.github.v3+json")
-            def response = connection.inputStream.text
-
-            // Find first release with "-android" in the tag
-            def matcher = response =~ /"tag_name"\s*:\s*"(v[^"]*-android)"/
-            if (matcher.find()) {
-                releaseTag = matcher.group(1)
-                println "Found latest Android release: $releaseTag"
-            }
-        } catch (Exception e) {
-            println "Could not fetch latest release, using fallback: $fallbackVersion"
-        }
+        println "Using DuckDB Android release: $releaseTag"
 
         supportedAbis.each { abi ->
             def libDir = file("$jniLibsDir/$abi")

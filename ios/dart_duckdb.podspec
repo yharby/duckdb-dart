@@ -27,23 +27,18 @@ This plugin provides DuckDB support for Flutter iOS apps.
   # Downloads pre-built iOS XCFramework from GitHub releases
   # The XCFramework contains both device (arm64) and simulator (arm64 + x86_64) architectures
   # Built automatically via GitHub Actions when new DuckDB versions are released
+  #
+  # IMPORTANT: Use pinned version for reproducible builds
+  # Update DUCKDB_IOS_VERSION when upgrading DuckDB
   s.prepare_command = <<-CMD
+    DUCKDB_IOS_VERSION="v1.4.3-ios"
+    RELEASE_URL="https://github.com/yharby/duckdb-dart/releases/download/${DUCKDB_IOS_VERSION}/duckdb-xcframework-ios.zip"
+
     mkdir -p Libraries/release
 
     if [ ! -d "Libraries/release/duckdb.xcframework" ]; then
-      echo "Downloading DuckDB iOS XCFramework..."
-
-      # Try to get latest iOS release, fallback to known working version
-      RELEASE_URL=$(curl -s https://api.github.com/repos/yharby/duckdb-dart/releases | \
-        grep -o 'https://github.com/yharby/duckdb-dart/releases/download/[^"]*ios[^"]*/duckdb-xcframework-ios.zip' | \
-        head -1)
-
-      if [ -z "$RELEASE_URL" ]; then
-        echo "Could not find latest iOS release, using fallback..."
-        RELEASE_URL="https://github.com/yharby/duckdb-dart/releases/download/v1.4.3-ios/duckdb-xcframework-ios.zip"
-      fi
-
-      echo "Downloading from: $RELEASE_URL"
+      echo "Downloading DuckDB iOS XCFramework (${DUCKDB_IOS_VERSION})..."
+      echo "URL: $RELEASE_URL"
       curl -L -o duckdb-xcframework-ios.zip "$RELEASE_URL"
 
       # Verify download succeeded (file should be > 10MB for XCFramework)
