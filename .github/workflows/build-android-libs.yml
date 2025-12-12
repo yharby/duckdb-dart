@@ -148,6 +148,10 @@ jobs:
           # Build with extensions statically linked into libduckdb.so
           # Following official DuckDB Android build docs:
           # https://duckdb.org/docs/stable/dev/building/android
+          #
+          # EXTENSION_STATIC_BUILD=1: Links extensions into the main libduckdb.so binary
+          # SKIP_EXTENSIONS: Prevents building loadable .duckdb_extension files (which fail to link on Android)
+          # Both flags together ensure extensions are statically linked but no loadable extension files are built
           cmake -G Ninja \
             -DCMAKE_TOOLCHAIN_FILE=$ANDROID_NDK_HOME/build/cmake/android.toolchain.cmake \
             -DANDROID_ABI=${{ matrix.abi }} \
@@ -160,6 +164,7 @@ jobs:
             -DBUILD_SHELL=OFF \
             -DEXTENSION_STATIC_BUILD=1 \
             -DBUILD_EXTENSIONS="icu;parquet;json;httpfs" \
+            -DSKIP_EXTENSIONS="icu;parquet;json;httpfs;core_functions" \
             -DENABLE_EXTENSION_AUTOLOADING=OFF \
             -DENABLE_EXTENSION_AUTOINSTALL=OFF \
             -DDUCKDB_EXTRA_LINK_FLAGS="-llog" \
