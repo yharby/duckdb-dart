@@ -247,17 +247,16 @@ jobs:
 
           if [ -f "${DEPS_DIR}/lib/libcurl.a" ]; then
             echo "Found cURL libraries"
-            CURL_OPTS="-DCURL_INCLUDE_DIR=${DEPS_DIR}/include -DCURL_LIBRARY=${DEPS_DIR}/lib/libcurl.a"
-            # Add extra link flags for static curl dependencies
+            # Build CURL_LIBRARY as CMake list with all required static libs
             if [ -f "${DEPS_DIR}/lib/libnghttp2.a" ]; then
-              EXTRA_CURL_LIBS="-DDUCKDB_EXTRA_LINK_FLAGS=-llog;${DEPS_DIR}/lib/libnghttp2.a;${DEPS_DIR}/lib/libssl.a;${DEPS_DIR}/lib/libcrypto.a;-lz"
+              CURL_OPTS="-DCURL_INCLUDE_DIR=${DEPS_DIR}/include"
+              CURL_OPTS="$CURL_OPTS -DCURL_LIBRARY=${DEPS_DIR}/lib/libcurl.a\;${DEPS_DIR}/lib/libnghttp2.a\;-lz"
             else
-              EXTRA_CURL_LIBS="-DDUCKDB_EXTRA_LINK_FLAGS=-llog;${DEPS_DIR}/lib/libssl.a;${DEPS_DIR}/lib/libcrypto.a;-lz"
+              CURL_OPTS="-DCURL_INCLUDE_DIR=${DEPS_DIR}/include -DCURL_LIBRARY=${DEPS_DIR}/lib/libcurl.a\;-lz"
             fi
           else
             echo "cURL libraries not found, httpfs may not work"
             CURL_OPTS=""
-            EXTRA_CURL_LIBS="-DDUCKDB_EXTRA_LINK_FLAGS=-llog"
           fi
 
           # Build with CMake
@@ -277,10 +276,10 @@ jobs:
             -DBUILD_LOADABLE_EXTENSIONS=OFF \
             -DENABLE_EXTENSION_AUTOLOADING=OFF \
             -DENABLE_EXTENSION_AUTOINSTALL=OFF \
+            -DDUCKDB_EXTRA_LINK_FLAGS="-llog" \
             -DDUCKDB_EXPLICIT_PLATFORM=${{ matrix.duckdb_platform }} \
             ${OPENSSL_OPTS} \
             ${CURL_OPTS} \
-            ${EXTRA_CURL_LIBS} \
             ..
 
           cmake --build . --config Release --parallel $(nproc)
