@@ -32,9 +32,19 @@ on:
 env:
   DUCKDB_REPO: duckdb/duckdb
   OPENSSL_REPO: yharby/openssl_for_ios_and_android
-  # Extensions to statically link (in-tree and out-of-tree)
-  # h3 is loaded via DUCKDB_EXTENSION_CONFIGS
-  EXTENSIONS: "icu;json;parquet;httpfs;fts;inet;vss;autocomplete;ducklake;sqlite_scanner;postgres_scanner"
+
+  # ========== EXTENSION CONFIGURATION ==========
+  # Core extensions (built-in to DuckDB, use BUILD_EXTENSIONS)
+  CORE_EXTENSIONS: "icu;json;parquet;httpfs;fts;inet;vss;autocomplete;ducklake;sqlite_scanner;postgres_scanner"
+
+  # Community extensions (loaded via DUCKDB_EXTENSION_CONFIGS with SOURCE_DIR)
+  # Format: "name|repo|branch" separated by spaces
+  # These require git clone --recursive to get submodules
+  COMMUNITY_EXTENSIONS: "h3|isaacbrodsky/h3-duckdb|main"
+  # To add more: "h3|isaacbrodsky/h3-duckdb|main a5|Query-farm/a5|main"
+  # Note: a5 requires Rust toolchain for cross-compilation
+  # =============================================
+
   # Minimum iOS version
   IOS_MIN_VERSION: "12.0"
 
@@ -186,23 +196,32 @@ jobs:
           git clone --depth 1 --branch "v${DUCKDB_VERSION}" \
             "https://github.com/${{ env.DUCKDB_REPO }}.git" duckdb-src
 
-      - name: Clone h3-duckdb Extension with Submodules
+      - name: Clone Community Extensions
         run: |
-          # Clone h3-duckdb with its h3 submodule
-          git clone --recursive https://github.com/isaacbrodsky/h3-duckdb.git h3-duckdb-ext
-          echo "=== h3-duckdb contents ==="
-          ls -la h3-duckdb-ext/
-          ls -la h3-duckdb-ext/h3/ || echo "h3 submodule directory"
+          # Parse COMMUNITY_EXTENSIONS and clone each one
+          # Format: "name|repo|branch" separated by spaces
+          for ext in ${{ env.COMMUNITY_EXTENSIONS }}; do
+            EXT_NAME=$(echo "$ext" | cut -d'|' -f1)
+            EXT_REPO=$(echo "$ext" | cut -d'|' -f2)
+            EXT_BRANCH=$(echo "$ext" | cut -d'|' -f3)
 
-      - name: Create h3 Extension Config
+            echo "=== Cloning community extension: $EXT_NAME from $EXT_REPO ($EXT_BRANCH) ==="
+            git clone --recursive --branch "$EXT_BRANCH" "https://github.com/${EXT_REPO}.git" "${EXT_NAME}-ext"
+            ls -la "${EXT_NAME}-ext/"
+          done
+
+      - name: Create Community Extension Config
         run: |
-          # Create extension config pointing to local h3-duckdb clone
-          cat > duckdb-src/extension_config_mobile.cmake << EOF
-          # Load h3 extension from local path (cloned with submodules)
-          duckdb_extension_load(h3
-              SOURCE_DIR "${GITHUB_WORKSPACE}/h3-duckdb-ext"
-          )
-          EOF
+          # Generate extension config from COMMUNITY_EXTENSIONS
+          echo "# Community extensions config (auto-generated)" > duckdb-src/extension_config_mobile.cmake
+
+          for ext in ${{ env.COMMUNITY_EXTENSIONS }}; do
+            EXT_NAME=$(echo "$ext" | cut -d'|' -f1)
+            echo "duckdb_extension_load($EXT_NAME" >> duckdb-src/extension_config_mobile.cmake
+            echo "    SOURCE_DIR \"\${GITHUB_WORKSPACE}/${EXT_NAME}-ext\"" >> duckdb-src/extension_config_mobile.cmake
+            echo ")" >> duckdb-src/extension_config_mobile.cmake
+          done
+
           echo "=== Extension config ==="
           cat duckdb-src/extension_config_mobile.cmake
 
@@ -229,7 +248,7 @@ jobs:
             -DBUILD_SHELL=OFF \
             -DBUILD_UNITTESTS=OFF \
             -DEXTENSION_STATIC_BUILD=ON \
-            -DBUILD_EXTENSIONS="${{ env.EXTENSIONS }}" \
+            -DBUILD_EXTENSIONS="${{ env.CORE_EXTENSIONS }}" \
             -DDUCKDB_EXTENSION_CONFIGS="${GITHUB_WORKSPACE}/duckdb-src/extension_config_mobile.cmake" \
             -DSKIP_EXTENSIONS="core_functions" \
             -DBUILD_LOADABLE_EXTENSIONS=OFF \
@@ -418,7 +437,8 @@ jobs:
             - **Minimum iOS**: ${{ env.IOS_MIN_VERSION }}
 
             ## Extensions (statically linked)
-            `${{ env.EXTENSIONS }}`
+            Core: `${{ env.CORE_EXTENSIONS }}`
+            Community: `${{ env.COMMUNITY_EXTENSIONS }}`
 
             ## Dependencies
             Built with libraries from [${{ env.OPENSSL_REPO }}](https://github.com/${{ env.OPENSSL_REPO }})
