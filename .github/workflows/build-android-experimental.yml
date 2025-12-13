@@ -1,0 +1,183 @@
+#
+# Experimental Android Build with h3 Extension
+#
+# This is a test workflow to check if h3 community extension builds for Android.
+# No release is created - just builds and verifies.
+#
+
+name: "[Experimental] Android with h3"
+
+on:
+  workflow_dispatch:
+    inputs:
+      duckdb_version:
+        description: 'DuckDB version (leave empty for latest)'
+        required: false
+        default: ''
+      abi:
+        description: 'Android ABI to build (arm64-v8a, armeabi-v7a, x86_64)'
+        required: false
+        default: 'arm64-v8a'
+
+env:
+  DUCKDB_REPO: duckdb/duckdb
+  OPENSSL_REPO: yharby/openssl_for_ios_and_android
+  # Core extensions (no postgres_scanner for Android)
+  EXTENSIONS: "icu;json;parquet;httpfs;fts;inet;vss;autocomplete;ducklake;sqlite_scanner"
+
+jobs:
+  prepare:
+    name: Prepare Build
+    runs-on: ubuntu-latest
+    outputs:
+      duckdb_version: ${{ steps.versions.outputs.duckdb }}
+      openssl_tag: ${{ steps.versions.outputs.openssl_tag }}
+    steps:
+      - name: Detect Versions
+        id: versions
+        run: |
+          # DuckDB version
+          if [ -n "${{ github.event.inputs.duckdb_version }}" ]; then
+            DUCKDB_VERSION="${{ github.event.inputs.duckdb_version }}"
+          else
+            DUCKDB_VERSION=$(curl -s https://api.github.com/repos/${{ env.DUCKDB_REPO }}/releases/latest | \
+              jq -r '.tag_name // empty' | sed 's/^v//')
+            [ -z "$DUCKDB_VERSION" ] || [ "$DUCKDB_VERSION" = "null" ] && DUCKDB_VERSION="1.4.3"
+          fi
+          echo "duckdb=$DUCKDB_VERSION" >> $GITHUB_OUTPUT
+          echo "DuckDB version: $DUCKDB_VERSION"
+
+          # OpenSSL release tag
+          OPENSSL_TAG=$(curl -s https://api.github.com/repos/${{ env.OPENSSL_REPO }}/releases | \
+            jq -r '[.[] | select(.tag_name | startswith("android-"))] | .[0].tag_name // empty')
+          [ -z "$OPENSSL_TAG" ] || [ "$OPENSSL_TAG" = "null" ] && OPENSSL_TAG="android-openssl3.0.15-curl8.11.1"
+          echo "openssl_tag=$OPENSSL_TAG" >> $GITHUB_OUTPUT
+          echo "OpenSSL release tag: $OPENSSL_TAG"
+
+  build:
+    name: Build Android ${{ github.event.inputs.abi || 'arm64-v8a' }} with h3
+    needs: prepare
+    runs-on: ubuntu-latest
+    steps:
+      - name: Setup Android NDK
+        uses: nttld/setup-ndk@v1
+        id: setup-ndk
+        with:
+          ndk-version: r27c
+          add-to-path: true
+
+      - name: Install Build Tools
+        run: sudo apt-get install -y ninja-build
+
+      - name: Download OpenSSL/cURL Libraries
+        run: |
+          OPENSSL_TAG="${{ needs.prepare.outputs.openssl_tag }}"
+          ABI="${{ github.event.inputs.abi || 'arm64-v8a' }}"
+
+          echo "Downloading combined library package for $ABI from release $OPENSSL_TAG"
+
+          COMBINED_URL="https://github.com/${{ env.OPENSSL_REPO }}/releases/download/${OPENSSL_TAG}/openssl-curl-nghttp2-android-${ABI}.zip"
+
+          mkdir -p deps/${ABI}
+
+          if curl -fLo deps/combined.zip "$COMBINED_URL" 2>/dev/null; then
+            echo "Downloaded combined package"
+            unzip -o deps/combined.zip -d deps/${ABI}
+          else
+            echo "ERROR: Could not download combined package"
+            exit 1
+          fi
+
+          echo "=== Downloaded libraries ==="
+          ls -la deps/${ABI}/lib/ 2>/dev/null || ls -la deps/${ABI}/
+
+      - name: Download DuckDB Source
+        run: |
+          DUCKDB_VERSION="${{ needs.prepare.outputs.duckdb_version }}"
+          echo "Downloading DuckDB v${DUCKDB_VERSION}"
+
+          curl -LO "https://github.com/${{ env.DUCKDB_REPO }}/archive/refs/tags/v${DUCKDB_VERSION}.zip"
+          unzip v${DUCKDB_VERSION}.zip
+          mv duckdb-${DUCKDB_VERSION} duckdb-src
+
+      - name: Create h3 Extension Config
+        run: |
+          # Create extension config for h3 community extension
+          cat > duckdb-src/extension_config_mobile.cmake << 'EOF'
+          # Load h3 extension from community repo
+          duckdb_extension_load(h3
+              GIT_URL https://github.com/isaacbrodsky/h3-duckdb
+              GIT_TAG main
+          )
+          EOF
+
+          echo "=== Extension config ==="
+          cat duckdb-src/extension_config_mobile.cmake
+
+      - name: Build DuckDB with h3
+        env:
+          ANDROID_NDK_HOME: ${{ steps.setup-ndk.outputs.ndk-path }}
+        run: |
+          cd duckdb-src
+          mkdir -p build
+          cd build
+
+          ABI="${{ github.event.inputs.abi || 'arm64-v8a' }}"
+          DEPS_DIR="${GITHUB_WORKSPACE}/deps/${ABI}"
+
+          # Determine platform based on ABI
+          if [ "$ABI" = "arm64-v8a" ] || [ "$ABI" = "armeabi-v7a" ]; then
+            DUCKDB_PLATFORM="linux_arm64"
+          else
+            DUCKDB_PLATFORM="linux_amd64"
+          fi
+
+          OPENSSL_OPTS="-DOPENSSL_ROOT_DIR=${DEPS_DIR} \
+            -DOPENSSL_INCLUDE_DIR=${DEPS_DIR}/include \
+            -DOPENSSL_CRYPTO_LIBRARY=${DEPS_DIR}/lib/libcrypto.a \
+            -DOPENSSL_SSL_LIBRARY=${DEPS_DIR}/lib/libssl.a \
+            -DOPENSSL_USE_STATIC_LIBS=TRUE"
+
+          CURL_OPTS="-DCURL_INCLUDE_DIR=${DEPS_DIR}/include \
+            -DCURL_LIBRARY=${DEPS_DIR}/lib/libcurl.a\;${DEPS_DIR}/lib/libnghttp2.a\;-lz"
+
+          cmake -G Ninja \
+            -DCMAKE_TOOLCHAIN_FILE=${ANDROID_NDK_HOME}/build/cmake/android.toolchain.cmake \
+            -DANDROID_ABI=${ABI} \
+            -DANDROID_PLATFORM=android-28 \
+            -DANDROID_STL=c++_static \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_POSITION_INDEPENDENT_CODE=ON \
+            -DBUILD_SHARED_LIBS=ON \
+            -DBUILD_UNITTESTS=OFF \
+            -DBUILD_SHELL=OFF \
+            -DEXTENSION_STATIC_BUILD=1 \
+            -DBUILD_EXTENSIONS="${{ env.EXTENSIONS }}" \
+            -DDUCKDB_EXTENSION_CONFIGS="${GITHUB_WORKSPACE}/duckdb-src/extension_config_mobile.cmake" \
+            -DSKIP_EXTENSIONS="core_functions" \
+            -DBUILD_LOADABLE_EXTENSIONS=OFF \
+            -DENABLE_EXTENSION_AUTOLOADING=OFF \
+            -DENABLE_EXTENSION_AUTOINSTALL=OFF \
+            -DDUCKDB_EXTRA_LINK_FLAGS="-llog" \
+            -DDUCKDB_EXPLICIT_PLATFORM=${DUCKDB_PLATFORM} \
+            ${OPENSSL_OPTS} \
+            ${CURL_OPTS} \
+            ..
+
+          cmake --build . --config Release --parallel $(nproc)
+
+      - name: Verify Build
+        env:
+          ANDROID_NDK_HOME: ${{ steps.setup-ndk.outputs.ndk-path }}
+        run: |
+          echo "=== Verifying DuckDB build with h3 ==="
+          ls -la duckdb-src/build/src/
+          file duckdb-src/build/src/libduckdb.so
+          echo "Library size: $(du -h duckdb-src/build/src/libduckdb.so | cut -f1)"
+
+          # Check if h3 symbols are present
+          echo "=== Checking for h3 symbols ==="
+          ${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-nm duckdb-src/build/src/libduckdb.so 2>/dev/null | grep -i h3 | head -10 || echo "No h3 symbols found (may be stripped)"
+
+          echo ""
+          echo "✅ Experimental Android build with h3 completed successfully!"

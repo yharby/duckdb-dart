@@ -1,0 +1,178 @@
+#
+# Experimental iOS Build with h3 Extension
+#
+# This is a test workflow to check if h3 community extension builds for iOS.
+# No release is created - just builds and verifies.
+#
+
+name: "[Experimental] iOS with h3"
+
+on:
+  workflow_dispatch:
+    inputs:
+      duckdb_version:
+        description: 'DuckDB version (leave empty for latest)'
+        required: false
+        default: ''
+
+env:
+  DUCKDB_REPO: duckdb/duckdb
+  OPENSSL_REPO: yharby/openssl_for_ios_and_android
+  # Core extensions + h3
+  EXTENSIONS: "icu;json;parquet;httpfs;fts;inet;vss;autocomplete;ducklake;sqlite_scanner;postgres_scanner"
+  IOS_MIN_VERSION: "12.0"
+
+jobs:
+  prepare:
+    name: Prepare Build
+    runs-on: ubuntu-latest
+    outputs:
+      duckdb_version: ${{ steps.versions.outputs.duckdb }}
+    steps:
+      - name: Detect DuckDB Version
+        id: versions
+        run: |
+          if [ -n "${{ github.event.inputs.duckdb_version }}" ]; then
+            DUCKDB_VERSION="${{ github.event.inputs.duckdb_version }}"
+          else
+            DUCKDB_VERSION=$(curl -s https://api.github.com/repos/${{ env.DUCKDB_REPO }}/releases/latest | \
+              jq -r '.tag_name // empty' | sed 's/^v//')
+            [ -z "$DUCKDB_VERSION" ] || [ "$DUCKDB_VERSION" = "null" ] && DUCKDB_VERSION="1.4.3"
+          fi
+          echo "duckdb=$DUCKDB_VERSION" >> $GITHUB_OUTPUT
+          echo "DuckDB version: $DUCKDB_VERSION"
+
+  build:
+    name: Build iOS arm64 with h3
+    needs: prepare
+    runs-on: macos-14
+    steps:
+      - name: Setup Xcode
+        uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: latest-stable
+
+      - name: Download OpenSSL and cURL
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # Get latest iOS release
+          RELEASE_TAG=$(gh release list --repo ${{ env.OPENSSL_REPO }} --limit 20 | grep "^ios-" | head -1 | awk '{print $3}')
+          [ -z "$RELEASE_TAG" ] && RELEASE_TAG="ios-openssl3.0.18-curl8.17.0"
+          echo "Using OpenSSL release: $RELEASE_TAG"
+
+          mkdir -p deps/{openssl,curl}/{lib,include}
+
+          # Download iOS device libraries
+          gh release download "$RELEASE_TAG" --repo ${{ env.OPENSSL_REPO }} \
+            --pattern "*ios-arm64.zip" --dir deps/
+
+          # Extract OpenSSL
+          OPENSSL_ZIP=$(ls deps/openssl_*-ios-arm64.zip 2>/dev/null | head -1)
+          if [ -n "$OPENSSL_ZIP" ]; then
+            unzip -o "$OPENSSL_ZIP" -d deps/openssl_tmp
+            cp deps/openssl_tmp/openssl/lib/*.a deps/openssl/lib/
+            cp -r deps/openssl_tmp/openssl/include/* deps/openssl/include/
+            rm -rf deps/openssl_tmp "$OPENSSL_ZIP"
+          fi
+
+          # Extract cURL
+          CURL_ZIP=$(ls deps/curl_*-ios-arm64.zip 2>/dev/null | head -1)
+          if [ -n "$CURL_ZIP" ]; then
+            unzip -o "$CURL_ZIP" -d deps/curl_tmp
+            cp deps/curl_tmp/curl/lib/*.a deps/curl/lib/
+            cp -r deps/curl_tmp/curl/include/* deps/curl/include/
+            rm -rf deps/curl_tmp "$CURL_ZIP"
+          fi
+
+          # Extract nghttp2
+          NGHTTP2_ZIP=$(ls deps/nghttp2_*-ios-arm64.zip 2>/dev/null | head -1)
+          if [ -n "$NGHTTP2_ZIP" ]; then
+            unzip -o "$NGHTTP2_ZIP" -d deps/nghttp2_tmp
+            cp deps/nghttp2_tmp/nghttp2/lib/*.a deps/curl/lib/
+            rm -rf deps/nghttp2_tmp "$NGHTTP2_ZIP"
+          fi
+
+          echo "=== Downloaded libraries ==="
+          ls -la deps/openssl/lib/
+          ls -la deps/curl/lib/
+
+      - name: Download DuckDB Source
+        run: |
+          DUCKDB_VERSION="${{ needs.prepare.outputs.duckdb_version }}"
+          echo "Downloading DuckDB v${DUCKDB_VERSION}"
+          git clone --depth 1 --branch "v${DUCKDB_VERSION}" \
+            "https://github.com/${{ env.DUCKDB_REPO }}.git" duckdb-src
+
+      - name: Create h3 Extension Config
+        run: |
+          # Create extension config for h3 community extension
+          cat > duckdb-src/extension_config_mobile.cmake << 'EOF'
+          # Load h3 extension from community repo
+          duckdb_extension_load(h3
+              GIT_URL https://github.com/isaacbrodsky/h3-duckdb
+              GIT_TAG main
+          )
+          EOF
+
+          echo "=== Extension config ==="
+          cat duckdb-src/extension_config_mobile.cmake
+
+      - name: Build DuckDB with h3
+        env:
+          DUCKDB_PLATFORM: osx_arm64
+        run: |
+          cd duckdb-src
+          mkdir -p build/ios-arm64
+          cd build/ios-arm64
+
+          OPENSSL_DIR="${GITHUB_WORKSPACE}/deps/openssl"
+          CURL_DIR="${GITHUB_WORKSPACE}/deps/curl"
+
+          cmake ../.. \
+            -G Ninja \
+            -DCMAKE_SYSTEM_NAME=iOS \
+            -DCMAKE_OSX_ARCHITECTURES=arm64 \
+            -DCMAKE_OSX_DEPLOYMENT_TARGET=${{ env.IOS_MIN_VERSION }} \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DBUILD_SHARED_LIBS=ON \
+            -DBUILD_SHELL=OFF \
+            -DBUILD_UNITTESTS=OFF \
+            -DEXTENSION_STATIC_BUILD=ON \
+            -DBUILD_EXTENSIONS="${{ env.EXTENSIONS }}" \
+            -DDUCKDB_EXTENSION_CONFIGS="${GITHUB_WORKSPACE}/duckdb-src/extension_config_mobile.cmake" \
+            -DSKIP_EXTENSIONS="core_functions" \
+            -DBUILD_LOADABLE_EXTENSIONS=OFF \
+            -DENABLE_EXTENSION_AUTOLOADING=OFF \
+            -DENABLE_EXTENSION_AUTOINSTALL=OFF \
+            -DDUCKDB_EXPLICIT_PLATFORM=osx_arm64 \
+            -DOPENSSL_ROOT_DIR=${OPENSSL_DIR} \
+            -DOPENSSL_INCLUDE_DIR=${OPENSSL_DIR}/include \
+            -DOPENSSL_CRYPTO_LIBRARY=${OPENSSL_DIR}/lib/libcrypto.a \
+            -DOPENSSL_SSL_LIBRARY=${OPENSSL_DIR}/lib/libssl.a \
+            -DOPENSSL_USE_STATIC_LIBS=TRUE \
+            -DCURL_INCLUDE_DIR=${CURL_DIR}/include \
+            -DCURL_LIBRARY="${CURL_DIR}/lib/libcurl.a;${CURL_DIR}/lib/libnghttp2.a;-lz"
+
+          cmake --build . --parallel $(sysctl -n hw.ncpu)
+
+      - name: Verify Build
+        run: |
+          echo "=== Verifying DuckDB build with h3 ==="
+          DYLIB=$(find duckdb-src/build/ios-arm64 -name "libduckdb.dylib" | head -1)
+          if [ -n "$DYLIB" ]; then
+            ls -la "$DYLIB"
+            file "$DYLIB"
+            echo "Library size: $(du -h "$DYLIB" | cut -f1)"
+
+            # Check if h3 symbols are present
+            echo "=== Checking for h3 symbols ==="
+            nm "$DYLIB" 2>/dev/null | grep -i h3 | head -10 || echo "No h3 symbols found (may be stripped)"
+          else
+            echo "ERROR: libduckdb.dylib not found!"
+            find duckdb-src/build -name "*.dylib" -o -name "*.so" | head -10
+            exit 1
+          fi
+
+          echo ""
+          echo "✅ Experimental iOS build with h3 completed successfully!"
