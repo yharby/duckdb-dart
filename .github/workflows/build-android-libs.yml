@@ -236,7 +236,8 @@ jobs:
         run: |
           # Parse COMMUNITY_EXTENSIONS and clone each one
           # Format: "name|repo|branch" separated by spaces
-          for ext in ${{ env.COMMUNITY_EXTENSIONS }}; do
+          EXTENSIONS="${{ env.COMMUNITY_EXTENSIONS }}"
+          for ext in $EXTENSIONS; do
             EXT_NAME=$(echo "$ext" | cut -d'|' -f1)
             EXT_REPO=$(echo "$ext" | cut -d'|' -f2)
             EXT_BRANCH=$(echo "$ext" | cut -d'|' -f3)
@@ -251,7 +252,8 @@ jobs:
           # Generate extension config from COMMUNITY_EXTENSIONS
           echo "# Community extensions config (auto-generated)" > duckdb-src/extension_config_mobile.cmake
 
-          for ext in ${{ env.COMMUNITY_EXTENSIONS }}; do
+          EXTENSIONS="${{ env.COMMUNITY_EXTENSIONS }}"
+          for ext in $EXTENSIONS; do
             EXT_NAME=$(echo "$ext" | cut -d'|' -f1)
             echo "duckdb_extension_load($EXT_NAME" >> duckdb-src/extension_config_mobile.cmake
             echo "    SOURCE_DIR \"\${GITHUB_WORKSPACE}/${EXT_NAME}-ext\"" >> duckdb-src/extension_config_mobile.cmake
