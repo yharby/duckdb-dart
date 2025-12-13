@@ -171,7 +171,8 @@ jobs:
             ${CURL_OPTS} \
             ..
 
-          cmake --build . --config Release --parallel $(nproc)
+          # Build only the duckdb target (avoids building loadable extensions and repo)
+          cmake --build . --target duckdb --config Release --parallel $(nproc)
 
       - name: Verify Build
         env:
