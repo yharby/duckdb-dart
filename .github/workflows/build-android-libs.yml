@@ -34,6 +34,7 @@ env:
   OPENSSL_REPO: yharby/openssl_for_ios_and_android
   # Extensions to statically link
   # Note: postgres_scanner excluded - libpq has Android NDK incompatibilities (explicit_bzero, __int128)
+  # h3 is loaded via DUCKDB_EXTENSION_CONFIGS
   EXTENSIONS: "icu;json;parquet;httpfs;fts;inet;vss;autocomplete;ducklake;sqlite_scanner"
 
 jobs:
@@ -222,6 +223,26 @@ jobs:
           unzip v${DUCKDB_VERSION}.zip
           mv duckdb-${DUCKDB_VERSION} duckdb-src
 
+      - name: Clone h3-duckdb Extension with Submodules
+        run: |
+          # Clone h3-duckdb with its h3 submodule
+          git clone --recursive https://github.com/isaacbrodsky/h3-duckdb.git h3-duckdb-ext
+          echo "=== h3-duckdb contents ==="
+          ls -la h3-duckdb-ext/
+          ls -la h3-duckdb-ext/h3/ || echo "h3 submodule directory"
+
+      - name: Create h3 Extension Config
+        run: |
+          # Create extension config pointing to local h3-duckdb clone
+          cat > duckdb-src/extension_config_mobile.cmake << EOF
+          # Load h3 extension from local path (cloned with submodules)
+          duckdb_extension_load(h3
+              SOURCE_DIR "${GITHUB_WORKSPACE}/h3-duckdb-ext"
+          )
+          EOF
+          echo "=== Extension config ==="
+          cat duckdb-src/extension_config_mobile.cmake
+
       - name: Build DuckDB with Extensions
         env:
           ANDROID_NDK_HOME: ${{ steps.setup-ndk.outputs.ndk-path }}
@@ -273,6 +294,7 @@ jobs:
             -DBUILD_SHELL=OFF \
             -DEXTENSION_STATIC_BUILD=1 \
             -DBUILD_EXTENSIONS="${{ env.EXTENSIONS }}" \
+            -DDUCKDB_EXTENSION_CONFIGS="${GITHUB_WORKSPACE}/duckdb-src/extension_config_mobile.cmake" \
             -DSKIP_EXTENSIONS="core_functions" \
             -DBUILD_LOADABLE_EXTENSIONS=OFF \
             -DENABLE_EXTENSION_AUTOLOADING=OFF \
@@ -283,7 +305,8 @@ jobs:
             ${CURL_OPTS} \
             ..
 
-          cmake --build . --config Release --parallel $(nproc)
+          # Build only the duckdb target (avoids building loadable extensions and repo)
+          cmake --build . --target duckdb --config Release --parallel $(nproc)
 
           # Strip debug symbols
           ${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-strip --strip-debug src/libduckdb.so
