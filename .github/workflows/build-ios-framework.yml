@@ -117,9 +117,6 @@ jobs:
         with:
           xcode-version: latest-stable
 
-      - name: Install Build Tools
-        run: brew install ninja
-
       - name: Download OpenSSL and cURL
         run: |
           OPENSSL_SOURCE="${{ github.event.inputs.openssl_source || 'jasonacox' }}"
