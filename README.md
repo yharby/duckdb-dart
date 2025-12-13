@@ -263,15 +263,15 @@ This fork provides pre-built DuckDB binaries for Android and iOS with statically
 | vss | None | ✅ Included | Vector similarity search |
 | autocomplete | None (in-tree) | ✅ Included | SQL autocomplete support |
 | ducklake | None | ✅ Included | [DuckLake](https://ducklake.select/) lakehouse format support |
+| sqlite_scanner | None | ✅ Included | Read/write SQLite files |
+| postgres_scanner | OpenSSL (bundled) | ✅ Included | Connect to PostgreSQL databases |
 | **Easy to add** ||||
 | tpch | None (in-tree) | ✅ Easy | TPC-H benchmark data generator |
 | tpcds | None (in-tree) | ✅ Easy | TPC-DS benchmark data generator |
-| sqlite_scanner | None | ✅ Easy | Read/write SQLite files |
 | **Medium complexity** ||||
 | excel | expat, minizip-ng | ⚠️ Medium | Requires cross-compiling dependencies |
 | avro | avro-c | ⚠️ Medium | Single C library needs cross-compile |
 | delta | OpenSSL | ⚠️ Medium | Already have OpenSSL from httpfs |
-| postgres_scanner | OpenSSL | ⚠️ Medium | Connect to PostgreSQL databases |
 | mysql | libmariadb | ⚠️ Medium | MariaDB connector needs cross-compile |
 | **Complex - Not recommended** ||||
 | aws | aws-sdk-cpp, curl, openssl, zlib | ❌ Complex | AWS SDK is huge C++ library |
