@@ -32,7 +32,7 @@ on:
 env:
   DUCKDB_REPO: duckdb/duckdb
   # Extensions to statically link
-  EXTENSIONS: "icu;json;parquet;httpfs;fts;inet"
+  EXTENSIONS: "icu;json;parquet;httpfs;fts;inet;sqlite;vss;autocomplete"
   # Minimum iOS version
   IOS_MIN_VERSION: "12.0"
 

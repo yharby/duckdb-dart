@@ -33,7 +33,7 @@ env:
   DUCKDB_REPO: duckdb/duckdb
   OPENSSL_REPO: yharby/openssl_for_ios_and_android
   # Extensions to statically link
-  EXTENSIONS: "icu;json;parquet;httpfs;fts;inet"
+  EXTENSIONS: "icu;json;parquet;httpfs;fts;inet;sqlite;vss;autocomplete"
 
 jobs:
   # ============================================================
