@@ -20,6 +20,7 @@
   - [Using Window Functions](#using-window-functions)
   - [Working with CSV Files](#working-with-csv-files)
 - [Platform Support](#platform-support)
+  - [Mobile Extensions (Android/iOS)](#mobile-extensions-androidios)
 - [API Documentation](#api-documentation)
 - [Contributing](#contributing)
 - [License](#license)
@@ -245,6 +246,40 @@ For Flutter web builds, add the following to `web/index.html` inside the `<head>
 ```
 
 See platform-specific details in the [Building Instructions](BUILDING.md)
+
+### Mobile Extensions (Android/iOS)
+
+This fork provides pre-built DuckDB binaries for Android and iOS with statically linked extensions. Below is the compatibility analysis for DuckDB core extensions on mobile platforms:
+
+| Extension | Dependencies | Mobile Support | Notes |
+|-----------|-------------|----------------|-------|
+| **Included in builds** ||||
+| icu | ICU library (bundled) | ✅ Included | Unicode/collation support |
+| json | None (in-tree) | ✅ Included | JSON parsing and querying |
+| parquet | None (in-tree) | ✅ Included | Parquet file format |
+| httpfs | OpenSSL, cURL, nghttp2 | ✅ Included | HTTP/HTTPS/S3 access (requires [openssl_for_ios_and_android](https://github.com/yharby/openssl_for_ios_and_android)) |
+| fts | None | ✅ Included | Full-text search |
+| inet | None | ✅ Included | IPv4/IPv6 address handling |
+| **Easy to add** ||||
+| autocomplete | None (in-tree) | ✅ Easy | Shell feature, not useful for mobile |
+| tpch | None (in-tree) | ✅ Easy | Benchmark data generator |
+| tpcds | None (in-tree) | ✅ Easy | Benchmark data generator |
+| sqlite | None | ✅ Easy | Read/write SQLite files |
+| vss | vcpkg-cmake only | ✅ Easy | Vector similarity search |
+| **Medium complexity** ||||
+| excel | expat, minizip-ng | ⚠️ Medium | Requires cross-compiling dependencies |
+| avro | avro-c | ⚠️ Medium | Single C library needs cross-compile |
+| delta | OpenSSL | ⚠️ Medium | Already have OpenSSL from httpfs |
+| postgres | OpenSSL | ⚠️ Medium | Already have OpenSSL |
+| mysql | libmariadb | ⚠️ Medium | MariaDB connector needs cross-compile |
+| **Complex - Not recommended** ||||
+| aws | aws-sdk-cpp, curl, openssl, zlib | ❌ Complex | AWS SDK is huge C++ library |
+| azure | azure-sdk-cpp (multiple libs) | ❌ Complex | Azure SDK is huge C++ library |
+| iceberg | avro-c, curl, openssl, roaring, aws-sdk-cpp | ❌ Complex | Heavy deps including AWS SDK |
+| spatial | GEOS, PROJ, GDAL, sqlite3, curl, openssl | ❌ Very Complex | GDAL is notoriously difficult to cross-compile |
+| jemalloc | System-specific | ⚠️ Platform issues | May have issues on mobile |
+
+Pre-built binaries are available from [GitHub Releases](https://github.com/yharby/duckdb-dart/releases).
 
 ---
 
