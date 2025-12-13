@@ -260,17 +260,18 @@ This fork provides pre-built DuckDB binaries for Android and iOS with statically
 | httpfs | OpenSSL, cURL, nghttp2 | ✅ Included | HTTP/HTTPS/S3 access (requires [openssl_for_ios_and_android](https://github.com/yharby/openssl_for_ios_and_android)) |
 | fts | None | ✅ Included | Full-text search |
 | inet | None | ✅ Included | IPv4/IPv6 address handling |
+| vss | None | ✅ Included | Vector similarity search |
+| autocomplete | None (in-tree) | ✅ Included | SQL autocomplete support |
+| ducklake | None | ✅ Included | [DuckLake](https://ducklake.select/) lakehouse format support |
 | **Easy to add** ||||
-| autocomplete | None (in-tree) | ✅ Easy | Shell feature, not useful for mobile |
-| tpch | None (in-tree) | ✅ Easy | Benchmark data generator |
-| tpcds | None (in-tree) | ✅ Easy | Benchmark data generator |
-| sqlite | None | ✅ Easy | Read/write SQLite files |
-| vss | vcpkg-cmake only | ✅ Easy | Vector similarity search |
+| tpch | None (in-tree) | ✅ Easy | TPC-H benchmark data generator |
+| tpcds | None (in-tree) | ✅ Easy | TPC-DS benchmark data generator |
+| sqlite_scanner | None | ✅ Easy | Read/write SQLite files |
 | **Medium complexity** ||||
 | excel | expat, minizip-ng | ⚠️ Medium | Requires cross-compiling dependencies |
 | avro | avro-c | ⚠️ Medium | Single C library needs cross-compile |
 | delta | OpenSSL | ⚠️ Medium | Already have OpenSSL from httpfs |
-| postgres | OpenSSL | ⚠️ Medium | Already have OpenSSL |
+| postgres_scanner | OpenSSL | ⚠️ Medium | Connect to PostgreSQL databases |
 | mysql | libmariadb | ⚠️ Medium | MariaDB connector needs cross-compile |
 | **Complex - Not recommended** ||||
 | aws | aws-sdk-cpp, curl, openssl, zlib | ❌ Complex | AWS SDK is huge C++ library |

@@ -3,9 +3,9 @@
 #
 # Features:
 # - Dynamic DuckDB version detection
-# - Uses pre-built OpenSSL/cURL from jasonacox/Build-OpenSSL-cURL or yharby/openssl_for_ios_and_android
+# - Uses pre-built OpenSSL/cURL from yharby/openssl_for_ios_and_android
 # - XCFramework output with device + simulator support
-# - Statically linked extensions (icu, json, parquet, httpfs)
+# - Statically linked extensions (icu, json, parquet, httpfs, fts, inet, vss, autocomplete)
 #
 
 name: Build iOS Framework
@@ -17,10 +17,10 @@ on:
         description: 'DuckDB version (leave empty for latest)'
         required: false
         default: ''
-      openssl_source:
-        description: 'OpenSSL source: jasonacox (recommended) or yharby'
+      openssl_release_tag:
+        description: 'OpenSSL release tag from yharby/openssl_for_ios_and_android (leave empty for latest)'
         required: false
-        default: 'jasonacox'
+        default: ''
       create_release:
         description: 'Create a GitHub release'
         type: boolean
@@ -31,8 +31,9 @@ on:
 
 env:
   DUCKDB_REPO: duckdb/duckdb
+  OPENSSL_REPO: yharby/openssl_for_ios_and_android
   # Extensions to statically link
-  EXTENSIONS: "icu;json;parquet;httpfs;fts;inet;vss;autocomplete"
+  EXTENSIONS: "icu;json;parquet;httpfs;fts;inet;vss;autocomplete;ducklake"
   # Minimum iOS version
   IOS_MIN_VERSION: "12.0"
 
@@ -119,72 +120,54 @@ jobs:
 
       - name: Download OpenSSL and cURL
         run: |
-          OPENSSL_SOURCE="${{ github.event.inputs.openssl_source || 'jasonacox' }}"
-
-          if [ "$OPENSSL_SOURCE" = "jasonacox" ]; then
-            echo "Downloading from jasonacox/Build-OpenSSL-cURL"
-            # Use jasonacox's pre-built libraries (most reliable for iOS)
-            PACKAGE="libcurl-8.11.1-openssl-3.0.15-nghttp2-1.64.0"
-            curl -L "https://github.com/jasonacox/Build-OpenSSL-cURL/releases/download/1.0.1/${PACKAGE}.tgz" | tar xzf -
-
-            # Setup directories based on target
-            if [ "${{ matrix.platform }}" = "iphoneos" ]; then
-              PLATFORM_DIR="iOS"
-            else
-              PLATFORM_DIR="iOS-simulator"
-            fi
-
-            mkdir -p deps/{openssl,curl}/{lib,include}
-
-            # Copy OpenSSL
-            cp ${PACKAGE}/lib/${PLATFORM_DIR}/libssl.a deps/openssl/lib/
-            cp ${PACKAGE}/lib/${PLATFORM_DIR}/libcrypto.a deps/openssl/lib/
-            cp -r ${PACKAGE}/include/openssl deps/openssl/include/
-
-            # Copy cURL and nghttp2
-            cp ${PACKAGE}/lib/${PLATFORM_DIR}/libcurl.a deps/curl/lib/
-            cp ${PACKAGE}/lib/${PLATFORM_DIR}/libnghttp2.a deps/curl/lib/
-            cp -r ${PACKAGE}/include/curl deps/curl/include/
+          # Get iOS release tag from yharby/openssl_for_ios_and_android
+          if [ -n "${{ github.event.inputs.openssl_release_tag }}" ]; then
+            RELEASE_TAG="${{ github.event.inputs.openssl_release_tag }}"
           else
-            echo "Downloading from yharby/openssl_for_ios_and_android"
-            # Get latest iOS release
-            RELEASE_TAG=$(curl -s https://api.github.com/repos/yharby/openssl_for_ios_and_android/releases | \
+            RELEASE_TAG=$(curl -s https://api.github.com/repos/${{ env.OPENSSL_REPO }}/releases | \
               jq -r '[.[] | select(.tag_name | startswith("ios-"))] | .[0].tag_name // empty')
+            [ -z "$RELEASE_TAG" ] || [ "$RELEASE_TAG" = "null" ] && RELEASE_TAG="ios-openssl3.0.18-curl8.17.0"
+          fi
+          echo "Using OpenSSL release: $RELEASE_TAG"
 
-            if [ -z "$RELEASE_TAG" ]; then
-              echo "No iOS release found, falling back to jasonacox"
-              # Fallback to jasonacox
-              PACKAGE="libcurl-8.11.1-openssl-3.0.15-nghttp2-1.64.0"
-              curl -L "https://github.com/jasonacox/Build-OpenSSL-cURL/releases/download/1.0.1/${PACKAGE}.tgz" | tar xzf -
+          BASE_URL="https://github.com/${{ env.OPENSSL_REPO }}/releases/download/${RELEASE_TAG}"
+          mkdir -p deps/{openssl,curl,nghttp2}/{lib,include}
 
-              if [ "${{ matrix.platform }}" = "iphoneos" ]; then
-                PLATFORM_DIR="iOS"
-              else
-                PLATFORM_DIR="iOS-simulator"
-              fi
+          # Determine suffix based on platform
+          if [ "${{ matrix.platform }}" = "iphoneos" ]; then
+            SUFFIX="ios-arm64"
+          else
+            SUFFIX="ios-simulator"
+          fi
 
-              mkdir -p deps/{openssl,curl}/{lib,include}
-              cp ${PACKAGE}/lib/${PLATFORM_DIR}/libssl.a deps/openssl/lib/
-              cp ${PACKAGE}/lib/${PLATFORM_DIR}/libcrypto.a deps/openssl/lib/
-              cp -r ${PACKAGE}/include/openssl deps/openssl/include/
-              cp ${PACKAGE}/lib/${PLATFORM_DIR}/libcurl.a deps/curl/lib/
-              cp ${PACKAGE}/lib/${PLATFORM_DIR}/libnghttp2.a deps/curl/lib/
-              cp -r ${PACKAGE}/include/curl deps/curl/include/
-            else
-              BASE_URL="https://github.com/yharby/openssl_for_ios_and_android/releases/download/${RELEASE_TAG}"
-              mkdir -p deps/{openssl,curl}/{lib,include}
+          # Extract version numbers from release tag (format: ios-openssl{ver}-curl{ver})
+          OPENSSL_VER=$(echo "$RELEASE_TAG" | sed -n 's/ios-openssl\([^-]*\)-.*/\1/p')
+          CURL_VER=$(echo "$RELEASE_TAG" | sed -n 's/.*-curl\(.*\)/\1/p')
 
-              # Download XCFrameworks or individual libs
-              if [ "${{ matrix.platform }}" = "iphoneos" ]; then
-                SUFFIX="ios-arm64"
-              else
-                SUFFIX="ios-simulator"
-              fi
+          echo "OpenSSL version: $OPENSSL_VER, cURL version: $CURL_VER"
 
-              # Try to download
-              curl -fLo deps/openssl.zip "${BASE_URL}/openssl_*-${SUFFIX}.zip" 2>/dev/null || true
-              curl -fLo deps/curl.zip "${BASE_URL}/curl_*-${SUFFIX}.zip" 2>/dev/null || true
-            fi
+          # Download OpenSSL
+          curl -fLo deps/openssl.zip "${BASE_URL}/openssl_${OPENSSL_VER}-${SUFFIX}.zip"
+          unzip -o deps/openssl.zip -d deps/openssl_tmp
+          cp deps/openssl_tmp/openssl/lib/*.a deps/openssl/lib/
+          cp -r deps/openssl_tmp/openssl/include/* deps/openssl/include/
+          rm -rf deps/openssl_tmp deps/openssl.zip
+
+          # Download cURL
+          curl -fLo deps/curl.zip "${BASE_URL}/curl_${CURL_VER}-${SUFFIX}.zip"
+          unzip -o deps/curl.zip -d deps/curl_tmp
+          cp deps/curl_tmp/curl/lib/*.a deps/curl/lib/
+          cp -r deps/curl_tmp/curl/include/* deps/curl/include/
+          rm -rf deps/curl_tmp deps/curl.zip
+
+          # Download nghttp2 (get version from release assets)
+          NGHTTP2_FILE=$(curl -s "https://api.github.com/repos/${{ env.OPENSSL_REPO }}/releases/tags/${RELEASE_TAG}" | \
+            jq -r ".assets[] | select(.name | contains(\"nghttp2\") and contains(\"${SUFFIX}\")) | .name" | head -1)
+          if [ -n "$NGHTTP2_FILE" ]; then
+            curl -fLo deps/nghttp2.zip "${BASE_URL}/${NGHTTP2_FILE}"
+            unzip -o deps/nghttp2.zip -d deps/nghttp2_tmp
+            cp deps/nghttp2_tmp/nghttp2/lib/*.a deps/curl/lib/  # Put nghttp2 with curl libs
+            rm -rf deps/nghttp2_tmp deps/nghttp2.zip
           fi
 
           echo "=== OpenSSL libraries ==="
@@ -415,7 +398,7 @@ jobs:
             `${{ env.EXTENSIONS }}`
 
             ## Dependencies
-            Built with [jasonacox/Build-OpenSSL-cURL](https://github.com/jasonacox/Build-OpenSSL-cURL) libraries
+            Built with libraries from [${{ env.OPENSSL_REPO }}](https://github.com/${{ env.OPENSSL_REPO }})
 
             Built automatically from [duckdb/duckdb v${{ needs.prepare.outputs.duckdb_version }}](https://github.com/duckdb/duckdb/releases/tag/v${{ needs.prepare.outputs.duckdb_version }})
           files: release/*.zip
