@@ -104,14 +104,21 @@ jobs:
           git clone --depth 1 --branch "v${DUCKDB_VERSION}" \
             "https://github.com/${{ env.DUCKDB_REPO }}.git" duckdb-src
 
+      - name: Clone h3-duckdb Extension with Submodules
+        run: |
+          # Clone h3-duckdb with its h3 submodule
+          git clone --recursive https://github.com/isaacbrodsky/h3-duckdb.git h3-duckdb-ext
+          echo "=== h3-duckdb contents ==="
+          ls -la h3-duckdb-ext/
+          ls -la h3-duckdb-ext/h3/ || echo "h3 submodule may not exist"
+
       - name: Create h3 Extension Config
         run: |
-          # Create extension config for h3 community extension
-          cat > duckdb-src/extension_config_mobile.cmake << 'EOF'
-          # Load h3 extension from community repo
+          # Create extension config pointing to local h3-duckdb clone
+          cat > duckdb-src/extension_config_mobile.cmake << EOF
+          # Load h3 extension from local path (cloned with submodules)
           duckdb_extension_load(h3
-              GIT_URL https://github.com/isaacbrodsky/h3-duckdb
-              GIT_TAG main
+              SOURCE_DIR "${GITHUB_WORKSPACE}/h3-duckdb-ext"
           )
           EOF
 
