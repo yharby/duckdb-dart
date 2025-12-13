@@ -251,20 +251,20 @@ See platform-specific details in the [Building Instructions](BUILDING.md)
 
 This fork provides pre-built DuckDB binaries for Android and iOS with statically linked extensions. Below is the compatibility analysis for DuckDB core extensions on mobile platforms:
 
-| Extension | Dependencies | Mobile Support | Notes |
-|-----------|-------------|----------------|-------|
-| **Included in builds** ||||
-| icu | ICU library (bundled) | ✅ Included | Unicode/collation support |
-| json | None (in-tree) | ✅ Included | JSON parsing and querying |
-| parquet | None (in-tree) | ✅ Included | Parquet file format |
-| httpfs | OpenSSL, cURL, nghttp2 | ✅ Included | HTTP/HTTPS/S3 access (requires [openssl_for_ios_and_android](https://github.com/yharby/openssl_for_ios_and_android)) |
-| fts | None | ✅ Included | Full-text search |
-| inet | None | ✅ Included | IPv4/IPv6 address handling |
-| vss | None | ✅ Included | Vector similarity search |
-| autocomplete | None (in-tree) | ✅ Included | SQL autocomplete support |
-| ducklake | None | ✅ Included | [DuckLake](https://ducklake.select/) lakehouse format support |
-| sqlite_scanner | None | ✅ Included | Read/write SQLite files |
-| postgres_scanner | OpenSSL (bundled) | ✅ Included | Connect to PostgreSQL databases |
+| Extension | Dependencies | Android | iOS | Notes |
+|-----------|-------------|:-------:|:---:|-------|
+| **Included in builds** |||||
+| icu | ICU library (bundled) | ✅ | ✅ | Unicode/collation support |
+| json | None (in-tree) | ✅ | ✅ | JSON parsing and querying |
+| parquet | None (in-tree) | ✅ | ✅ | Parquet file format |
+| httpfs | OpenSSL, cURL, nghttp2 | ✅ | ✅ | HTTP/HTTPS/S3 access (requires [openssl_for_ios_and_android](https://github.com/yharby/openssl_for_ios_and_android)) |
+| fts | None | ✅ | ✅ | Full-text search |
+| inet | None | ✅ | ✅ | IPv4/IPv6 address handling |
+| vss | None | ✅ | ✅ | Vector similarity search |
+| autocomplete | None (in-tree) | ✅ | ✅ | SQL autocomplete support |
+| ducklake | None | ✅ | ✅ | [DuckLake](https://ducklake.select/) lakehouse format support |
+| sqlite_scanner | None | ✅ | ✅ | Read/write SQLite files |
+| postgres_scanner | OpenSSL (bundled) | ❌ | ✅ | Connect to PostgreSQL databases (Android: [libpq NDK issues](https://github.com/microsoft/vcpkg/issues/33211)) |
 | **Easy to add** ||||
 | tpch | None (in-tree) | ✅ Easy | TPC-H benchmark data generator |
 | tpcds | None (in-tree) | ✅ Easy | TPC-DS benchmark data generator |
