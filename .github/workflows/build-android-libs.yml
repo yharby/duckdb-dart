@@ -392,8 +392,8 @@ jobs:
             - **NDK Version**: r27c
 
             ## Extensions (statically linked)
-            Core: `${{ env.CORE_EXTENSIONS }}`
-            Community: `${{ env.COMMUNITY_EXTENSIONS }}`
+            **Core:** `${{ env.CORE_EXTENSIONS }}`
+            **Community:** h3 ([h3-duckdb](https://github.com/isaacbrodsky/h3-duckdb))
 
             ## Dependencies
             Built with libraries from [${{ env.OPENSSL_REPO }}](https://github.com/${{ env.OPENSSL_REPO }}/releases/tag/${{ needs.prepare.outputs.openssl_tag }})
