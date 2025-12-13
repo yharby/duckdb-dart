@@ -255,8 +255,9 @@ jobs:
           EXTENSIONS="${{ env.COMMUNITY_EXTENSIONS }}"
           for ext in $EXTENSIONS; do
             EXT_NAME=$(echo "$ext" | cut -d'|' -f1)
+            EXT_DIR="${GITHUB_WORKSPACE}/${EXT_NAME}-ext"
             echo "duckdb_extension_load($EXT_NAME" >> duckdb-src/extension_config_mobile.cmake
-            echo "    SOURCE_DIR \"\${GITHUB_WORKSPACE}/${EXT_NAME}-ext\"" >> duckdb-src/extension_config_mobile.cmake
+            echo "    SOURCE_DIR \"$EXT_DIR\"" >> duckdb-src/extension_config_mobile.cmake
             echo ")" >> duckdb-src/extension_config_mobile.cmake
           done
 
