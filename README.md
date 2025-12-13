@@ -265,6 +265,8 @@ This fork provides pre-built DuckDB binaries for Android and iOS with statically
 | ducklake | None | ✅ | ✅ | [DuckLake](https://ducklake.select/) lakehouse format support |
 | sqlite_scanner | None | ✅ | ✅ | Read/write SQLite files |
 | postgres_scanner | OpenSSL (bundled) | ❌ | ✅ | Connect to PostgreSQL databases (Android: [libpq NDK issues](https://github.com/microsoft/vcpkg/issues/33211)) |
+| **Community extensions** |||||
+| h3 | None (bundled) | ✅ | ✅ | [H3](https://h3geo.org/) hexagonal hierarchical geospatial indexing |
 | **Easy to add** ||||
 | tpch | None (in-tree) | ✅ Easy | TPC-H benchmark data generator |
 | tpcds | None (in-tree) | ✅ Easy | TPC-DS benchmark data generator |
@@ -281,6 +283,22 @@ This fork provides pre-built DuckDB binaries for Android and iOS with statically
 | jemalloc | System-specific | ⚠️ Platform issues | May have issues on mobile |
 
 Pre-built binaries are available from [GitHub Releases](https://github.com/yharby/duckdb-dart/releases).
+
+#### Adding Community Extensions
+
+Community extensions can be easily added to the build by editing the `COMMUNITY_EXTENSIONS` variable in the workflow files:
+
+```yaml
+# Format: "name|repo|branch" separated by spaces
+COMMUNITY_EXTENSIONS: "h3|isaacbrodsky/h3-duckdb|main"
+
+# To add more extensions:
+COMMUNITY_EXTENSIONS: "h3|isaacbrodsky/h3-duckdb|main newext|owner/repo|branch"
+```
+
+The build system will automatically clone each extension with its submodules and generate the CMake configuration. See the [h3-duckdb](https://github.com/isaacbrodsky/h3-duckdb) extension as an example.
+
+> **Note:** Some community extensions like [a5](https://github.com/Query-farm/a5) require additional toolchains (e.g., Rust) for cross-compilation and are not currently supported.
 
 ---
 
